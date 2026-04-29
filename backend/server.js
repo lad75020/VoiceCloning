@@ -45,6 +45,7 @@ let AUTH_JWT_SECRET = process.env.AUTH_JWT_SECRET || null;
 const AUTH_SESSION_TTL_SECONDS = parseInt(process.env.AUTH_SESSION_TTL_SECONDS || `${12 * 60 * 60}`, 10);
 const AUTH_INITIAL_USERNAME = process.env.AUTH_INITIAL_USERNAME || null;
 const AUTH_INITIAL_PASSWORD = process.env.AUTH_INITIAL_PASSWORD || null;
+const MCP_AUTH_TOKEN_KEY = 'mcp_auth_token';
 
 const AUDIO_EXT_BY_MIME = {
   'audio/aac': 'aac',
@@ -112,6 +113,8 @@ if (!AUTH_JWT_SECRET) {
   }
 }
 
+const MCP_AUTH_TOKEN = getOrCreateAuthSetting(MCP_AUTH_TOKEN_KEY, () => randomBytes(32).toString('base64url'));
+
 const userCount = authDb.prepare('SELECT COUNT(*) AS count FROM users').get().count;
 if (userCount === 0 && AUTH_INITIAL_USERNAME && AUTH_INITIAL_PASSWORD) {
   authDb.prepare(`
@@ -129,14 +132,18 @@ const fastify = Fastify({
 });
 
 await fastify.register(cors, {
-  origin: true,
-  exposedHeaders: ['X-Generation-Duration-Seconds', 'X-Generation-Job-Id', 'X-Voice-Cloning-Engine', 'X-Language'],
+  origin: '*',
+  exposedHeaders: ['X-Generation-Duration-Seconds', 'X-Generation-Job-Id', 'X-Voice-Cloning-Engine', 'X-Language', 'MCP-Session-Id'],
 });
 await fastify.register(multipart, {
   limits: { fileSize: MAX_AUDIO_SAMPLE_BYTES },
 });
 
 fastify.addHook('preHandler', async (request, reply) => {
+  if (isMcpRoute(request)) {
+    setMcpCorsHeaders(reply);
+  }
+
   if (!requiresAuthentication(request)) {
     return;
   }
@@ -162,10 +169,39 @@ try {
 
 function requiresAuthentication(request) {
   const url = request.url.split('?')[0];
-  if (url === '/api/auth/login') {
+  if (url === '/api/auth/login' || (url === '/mcp' && request.method === 'OPTIONS')) {
     return false;
   }
   return url.startsWith('/api/') || url === '/mcp';
+}
+
+function isMcpRoute(request) {
+  return request.url.split('?')[0] === '/mcp';
+}
+
+function setMcpCorsHeaders(reply) {
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Authorization, Content-Type, MCP-Protocol-Version, MCP-Session-Id',
+    'Access-Control-Expose-Headers': 'MCP-Session-Id',
+  };
+
+  for (const [name, value] of Object.entries(headers)) {
+    reply.header(name, value);
+    reply.raw?.setHeader(name, value);
+  }
+}
+
+function getOrCreateAuthSetting(key, createValue) {
+  const storedValue = authDb.prepare('SELECT value FROM auth_settings WHERE key = ?').get(key)?.value;
+  if (storedValue) {
+    return storedValue;
+  }
+
+  const value = createValue();
+  authDb.prepare('INSERT INTO auth_settings (key, value) VALUES (?, ?)').run(key, value);
+  return value;
 }
 
 function hashPassword(password) {
@@ -238,6 +274,10 @@ function getBearerToken(request) {
 }
 
 function authenticateRequest(request) {
+  if (isMcpRoute(request)) {
+    return authenticateMcpRequest(request);
+  }
+
   const token = getBearerToken(request);
   if (!token) {
     return { ok: false, error: 'Authentication required.' };
@@ -271,6 +311,25 @@ function authenticateRequest(request) {
     ok: true,
     user: { id: row.user_id, username: row.username },
     session: { id: row.session_id, expiresAt: row.expires_at },
+  };
+}
+
+function authenticateMcpRequest(request) {
+  const token = getBearerToken(request);
+  if (!token) {
+    return { ok: false, error: 'MCP authentication required.' };
+  }
+
+  const actual = Buffer.from(token);
+  const expected = Buffer.from(MCP_AUTH_TOKEN);
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+    return { ok: false, error: 'Invalid MCP token.' };
+  }
+
+  return {
+    ok: true,
+    user: { id: 'mcp', username: 'mcp' },
+    session: { id: 'mcp-shared-token', expiresAt: null },
   };
 }
 
@@ -804,6 +863,12 @@ fastify.get('/api/health', async () => ({
  * Exposes the clone_voice_to_mp3 tool for AI agents.
  */
 fastify.all('/mcp', async (request, reply) => {
+  setMcpCorsHeaders(reply);
+
+  if (request.method === 'OPTIONS') {
+    return reply.code(204).send();
+  }
+
   if (request.method !== 'POST') {
     return reply
       .code(405)
