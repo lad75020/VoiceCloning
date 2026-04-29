@@ -1,0 +1,24 @@
+:host {
+  display: block;
+  min-height: 100vh;
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
+}
+
+.app-navbar {
+  background: var(--bs-tertiary-bg);
+}
+
+.navbar-brand {
+  color: var(--bs-emphasis-color);
+}
+
+.app-card-header {
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-emphasis-color);
+  border-bottom-color: var(--bs-border-color);
+}
+
+.app-card-header-success {
+  color: var(--bs-success-text-emphasis);
+}

@@ -1,0 +1,19 @@
+{
+  "name": "voice-cloning-backend",
+  "version": "1.0.0",
+  "description": "Fastify backend for voice cloning with OmniVoice and MLX/Qwen",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.1",
+    "@fastify/multipart": "^9.0.1",
+    "@fastify/static": "^8.0.3",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "fastify": "^5.1.0",
+    "zod": "^4.3.6"
+  }
+}

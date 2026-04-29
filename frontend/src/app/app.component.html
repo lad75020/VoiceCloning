@@ -1,0 +1,199 @@
+<nav class="navbar app-navbar border-bottom">
+  <div class="container">
+    <span class="navbar-brand mb-0 h1">Voice Cloning Studio</span>
+  </div>
+</nav>
+
+<main class="container py-4">
+  <p class="text-muted">
+    Record a short sample of your voice, enter text, and generate speech in your cloned voice using OmniVoice or MLX/Qwen.
+  </p>
+
+  @if (error()) {
+    <div class="alert alert-danger" role="alert">{{ error() }}</div>
+  }
+
+  <div class="row g-4">
+    <!-- Step 1: Record voice -->
+    <div class="col-lg-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header app-card-header">
+          <strong>Step 1 — Record your voice</strong>
+        </div>
+        <div class="card-body">
+          <label class="form-label" for="recordLang">Recording language</label>
+          <select id="recordLang" class="form-select mb-3"
+                  [ngModel]="recordLanguage()"
+                  (ngModelChange)="recordLanguage.set($event)">
+            @for (lang of languages; track lang.code) {
+              <option [value]="lang.code">{{ lang.label }}</option>
+            }
+          </select>
+
+          <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+            <button class="btn"
+                    [class.btn-danger]="isRecording()"
+                    [class.btn-success]="!isRecording()"
+                    (click)="toggleRecording()"
+                    [disabled]="uploading()">
+              @if (isRecording()) {
+                <span class="spinner-grow spinner-grow-sm me-2" role="status"></span>
+                Stop recording
+              } @else {
+                Start recording
+              }
+            </button>
+
+            @if (recordedBlobUrl() && !isRecording()) {
+              <button class="btn btn-outline-secondary"
+                      (click)="clearRecording()"
+                      [disabled]="uploading() || generating()">
+                Clear
+              </button>
+            }
+
+            @if (uploading()) {
+              <span class="text-muted ms-2">
+                <span class="spinner-border spinner-border-sm me-1"></span>
+                Uploading &amp; converting&hellip;
+              </span>
+            }
+          </div>
+
+          @if (recordedBlobUrl()) {
+            <div class="mb-2">
+              <label class="form-label small text-muted">Your recording</label>
+              <audio controls [src]="recordedBlobUrl()!" class="w-100"></audio>
+            </div>
+
+            <div class="input-group mb-3">
+              <input type="text"
+                     class="form-control"
+                     placeholder="Voice name"
+                     aria-label="Voice name"
+                     [ngModel]="voiceName()"
+                     (ngModelChange)="voiceName.set($event)"
+                     [disabled]="uploading()">
+              <button class="btn btn-outline-primary"
+                      type="button"
+                      (click)="saveCurrentVoice()"
+                      [disabled]="!canSaveVoice()">
+                Save voice
+              </button>
+            </div>
+          }
+
+          <label class="form-label" for="storedVoice">Available voices</label>
+          <div class="input-group mb-3">
+            <select id="storedVoice"
+                    class="form-select"
+                    [ngModel]="selectedStoredVoiceId() || ''"
+                    (ngModelChange)="selectStoredVoice($event)"
+                    [disabled]="uploading() || generating() || storedVoices().length === 0">
+              @if (storedVoices().length) {
+                <option value="" disabled>Select a saved voice</option>
+              } @else {
+                <option value="" disabled>No saved voices</option>
+              }
+              @for (voice of storedVoices(); track voice.id) {
+                <option [value]="voice.id">{{ voice.name }}</option>
+              }
+            </select>
+            <button class="btn btn-outline-danger"
+                    type="button"
+                    (click)="deleteStoredVoice(selectedStoredVoiceId()!)"
+                    [disabled]="!selectedStoredVoiceId() || uploading() || generating()">
+              Delete
+            </button>
+          </div>
+
+          @if (voiceId()) {
+            <div class="alert alert-success py-2 mb-0 small">
+              Voice reference ready (id: <code>{{ voiceId() }}</code>)
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2: Enter text & generate -->
+    <div class="col-lg-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header app-card-header">
+          <strong>Step 2 — Enter text to speak</strong>
+        </div>
+        <div class="card-body d-flex flex-column">
+          <label class="form-label" for="engineSelect">Voice cloning solution</label>
+          <div id="engineSelect" class="btn-group mb-3" role="group" aria-label="Voice cloning solution">
+            @for (option of engines; track option.id) {
+              <input type="radio"
+                     class="btn-check"
+                     name="voiceEngine"
+                     [id]="'engine-' + option.id"
+                     [value]="option.id"
+                     [ngModel]="engine()"
+                     (ngModelChange)="engine.set($event)"
+                     [disabled]="generating()">
+              <label class="btn btn-outline-primary" [for]="'engine-' + option.id">
+                {{ option.label }}
+              </label>
+            }
+          </div>
+
+          <label class="form-label" for="textLang">Text language</label>
+          <select id="textLang" class="form-select mb-3"
+                  [ngModel]="textLanguage()"
+                  (ngModelChange)="textLanguage.set($event)">
+            @for (lang of languages; track lang.code) {
+              <option [value]="lang.code">{{ lang.label }}</option>
+            }
+          </select>
+
+          <label class="form-label" for="textInput">Text</label>
+          <textarea id="textInput" class="form-control mb-3" rows="6"
+                    placeholder="Type the text you want to synthesize…"
+                    [ngModel]="text()"
+                    (ngModelChange)="text.set($event)"
+                    [disabled]="generating()"></textarea>
+
+          <button class="btn btn-primary mt-auto"
+                  (click)="generate()"
+                  [disabled]="!canGenerate()">
+            @if (generating()) {
+              <span class="spinner-border spinner-border-sm me-2"></span>
+              Generating&hellip;
+            } @else {
+              Generate
+            }
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Result -->
+  @if (generatedUrl()) {
+    <div class="card shadow-sm mt-4">
+      <div class="card-header app-card-header app-card-header-success">
+        <strong>Result</strong>
+      </div>
+      <div class="card-body">
+        @if (generationSeconds()) {
+          <div class="text-muted small mb-2">
+            Generated in {{ generationSeconds() }} seconds
+          </div>
+        }
+        <audio controls [src]="generatedUrl()!" class="w-100"></audio>
+        <a class="btn btn-outline-success btn-sm mt-2"
+           [href]="generatedUrl()!"
+           download="generated.webm">
+          Download
+        </a>
+      </div>
+    </div>
+  }
+
+  <footer class="text-center text-muted small mt-5">
+    Powered by OmniVoice · MLX/Qwen · Fastify · Angular · Bootstrap
+  </footer>
+</main>
