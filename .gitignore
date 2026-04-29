@@ -135,3 +135,4 @@ dist
 .yarn/install-state.gz
 .pnp.*
 .claude
+.claude/worktrees/elegant-elion-c95cc3
