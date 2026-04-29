@@ -130,7 +130,7 @@ const fastify = Fastify({
 
 await fastify.register(cors, {
   origin: true,
-  exposedHeaders: ['X-Generation-Duration-Seconds', 'X-Voice-Cloning-Engine', 'X-Language'],
+  exposedHeaders: ['X-Generation-Duration-Seconds', 'X-Generation-Job-Id', 'X-Voice-Cloning-Engine', 'X-Language'],
 });
 await fastify.register(multipart, {
   limits: { fileSize: MAX_AUDIO_SAMPLE_BYTES },
@@ -300,21 +300,79 @@ function createSession(user) {
  * Run a command, resolving with { code, stdout, stderr }.
  */
 function runCommand(cmd, args, opts = {}) {
+  const { signal, ...spawnOpts } = opts;
+
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { ...opts });
+    if (signal?.aborted) {
+      reject(createJobCanceledError());
+      return;
+    }
+
+    let settled = false;
+    let aborted = false;
+    let killTimer = null;
+    const child = spawn(cmd, args, {
+      ...spawnOpts,
+      detached: !!signal || spawnOpts.detached,
+    });
     let stdout = '';
     let stderr = '';
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('error', reject);
-    child.on('close', (code) => resolve({ code, stdout, stderr }));
+
+    const cleanup = () => {
+      if (killTimer) clearTimeout(killTimer);
+      signal?.removeEventListener('abort', abortHandler);
+    };
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn(value);
+    };
+    const killChild = (signalName) => {
+      try {
+        if (child.pid && (signal || spawnOpts.detached)) {
+          process.kill(-child.pid, signalName);
+        } else {
+          child.kill(signalName);
+        }
+      } catch {
+        try { child.kill(signalName); } catch { /* ignore */ }
+      }
+    };
+    const abortHandler = () => {
+      aborted = true;
+      killChild('SIGTERM');
+      killTimer = setTimeout(() => killChild('SIGKILL'), 5000);
+    };
+
+    child.stdout?.on('data', (d) => { stdout += d.toString(); });
+    child.stderr?.on('data', (d) => { stderr += d.toString(); });
+    child.on('error', (err) => finish(reject, aborted ? createJobCanceledError() : err));
+    child.on('close', (code) => {
+      if (aborted) {
+        finish(reject, createJobCanceledError());
+      } else {
+        finish(resolve, { code, stdout, stderr });
+      }
+    });
+    signal?.addEventListener('abort', abortHandler, { once: true });
   });
+}
+
+function createJobCanceledError() {
+  const err = new Error('Generation job was cancelled.');
+  err.code = 'GENERATION_CANCELLED';
+  return err;
+}
+
+function isJobCanceledError(err) {
+  return err?.code === 'GENERATION_CANCELLED';
 }
 
 /**
  * Convert input audio (webm/ogg/m4a/etc.) to mono 16 kHz PCM WAV.
  */
-async function convertToWav(inputPath, outputPath) {
+async function convertToWav(inputPath, outputPath, signal) {
   const args = [
     '-y',
     '-i', inputPath,
@@ -323,7 +381,7 @@ async function convertToWav(inputPath, outputPath) {
     '-sample_fmt', 's16',
     outputPath,
   ];
-  const result = await runCommand(FFMPEG_BIN, args);
+  const result = await runCommand(FFMPEG_BIN, args, { signal });
   if (result.code !== 0) {
     throw new Error(`ffmpeg (to wav) failed: ${result.stderr}`);
   }
@@ -332,7 +390,7 @@ async function convertToWav(inputPath, outputPath) {
 /**
  * Convert a WAV file to WebM/Opus.
  */
-async function convertToWebmOpus(inputPath, outputPath) {
+async function convertToWebmOpus(inputPath, outputPath, signal) {
   const args = [
     '-y',
     '-i', inputPath,
@@ -342,7 +400,7 @@ async function convertToWebmOpus(inputPath, outputPath) {
     '-application', 'audio',
     outputPath,
   ];
-  const result = await runCommand(FFMPEG_BIN, args);
+  const result = await runCommand(FFMPEG_BIN, args, { signal });
   if (result.code !== 0) {
     throw new Error(`ffmpeg (to webm/opus) failed: ${result.stderr}`);
   }
@@ -351,7 +409,7 @@ async function convertToWebmOpus(inputPath, outputPath) {
 /**
  * Convert a WAV file to MP3.
  */
-async function convertToMp3(inputPath, outputPath) {
+async function convertToMp3(inputPath, outputPath, signal) {
   const args = [
     '-y',
     '-i', inputPath,
@@ -359,7 +417,7 @@ async function convertToMp3(inputPath, outputPath) {
     '-b:a', '192k',
     outputPath,
   ];
-  const result = await runCommand(FFMPEG_BIN, args);
+  const result = await runCommand(FFMPEG_BIN, args, { signal });
   if (result.code !== 0) {
     throw new Error(`ffmpeg (to mp3) failed: ${result.stderr}`);
   }
@@ -369,7 +427,7 @@ async function convertToMp3(inputPath, outputPath) {
  * Invoke omnivoice-infer inside the configured conda env.
  * Uses `conda run` so no shell activation is required.
  */
-async function runOmnivoiceInfer({ text, refWav, outWav }) {
+async function runOmnivoiceInfer({ text, refWav, outWav, signal }) {
   const condaBin = path.join(CONDA_BASE, 'bin', 'conda');
   const args = [
     'run',
@@ -382,7 +440,7 @@ async function runOmnivoiceInfer({ text, refWav, outWav }) {
     '--output', outWav,
   ];
   fastify.log.info({ cmd: condaBin, args }, 'Running omnivoice-infer');
-  const result = await runCommand(condaBin, args);
+  const result = await runCommand(condaBin, args, { signal });
   if (result.code !== 0) {
     throw new Error(`omnivoice-infer failed (code ${result.code}): ${result.stderr || result.stdout}`);
   }
@@ -393,7 +451,7 @@ async function runOmnivoiceInfer({ text, refWav, outWav }) {
  * Invoke mlx-audio's Qwen3-TTS generator inside the configured conda env.
  * Uses --join_audio so the expected output is exactly `${jobId}.wav`.
  */
-async function runMlxQwenInfer({ text, language, refWav, outWav, jobId }) {
+async function runMlxQwenInfer({ text, language, refWav, outWav, jobId, signal }) {
   const condaBin = path.join(CONDA_BASE, 'bin', 'conda');
   const args = [
     'run',
@@ -417,7 +475,7 @@ async function runMlxQwenInfer({ text, language, refWav, outWav, jobId }) {
   }
 
   fastify.log.info({ cmd: condaBin, args }, 'Running MLX/Qwen TTS');
-  const result = await runCommand(condaBin, args);
+  const result = await runCommand(condaBin, args, { signal });
   let outputStats = null;
   try {
     outputStats = await fs.stat(outWav);
@@ -449,6 +507,10 @@ function normalizeLanguageCode(language) {
     return value;
   }
   return null;
+}
+
+function isValidJobId(jobId) {
+  return typeof jobId === 'string' && /^[a-f0-9-]{8,}$/i.test(jobId);
 }
 
 function validateGenerationText(text) {
@@ -515,24 +577,23 @@ async function storeReferenceAudioFromBuffer({ buffer, mimeType, filename }) {
   return { voiceId: id, uploadedPath, wavPath };
 }
 
-async function generateClonedAudio({ text, refWav, format, engine = 'omnivoice', language }) {
+async function generateClonedAudio({ text, refWav, format, engine = 'omnivoice', language, jobId = randomUUID(), signal }) {
   validateGenerationText(text);
 
   const selectedEngine = normalizeGenerationEngine(engine);
-  const jobId = randomUUID();
   const outWav = path.join(OUTPUTS_DIR, `${jobId}.wav`);
   const outPath = path.join(OUTPUTS_DIR, `${jobId}.${format}`);
 
   if (selectedEngine === VOICE_CLONING_ENGINES['mlx-qwen'].id) {
-    await runMlxQwenInfer({ text, language, refWav, outWav, jobId });
+    await runMlxQwenInfer({ text, language, refWav, outWav, jobId, signal });
   } else {
-    await runOmnivoiceInfer({ text, refWav, outWav });
+    await runOmnivoiceInfer({ text, refWav, outWav, signal });
   }
 
   if (format === 'mp3') {
-    await convertToMp3(outWav, outPath);
+    await convertToMp3(outWav, outPath, signal);
   } else if (format === 'webm') {
-    await convertToWebmOpus(outWav, outPath);
+    await convertToWebmOpus(outWav, outPath, signal);
   } else {
     throw new Error(`Unsupported output format: ${format}`);
   }
@@ -542,6 +603,95 @@ async function generateClonedAudio({ text, refWav, format, engine = 'omnivoice',
 
   return { jobId, data, outputPath: outPath, engine: selectedEngine };
 }
+
+class GenerationJobQueue {
+  activeJob = null;
+  queuedJobs = [];
+  jobs = new Map();
+
+  submit({ id, userId, run }) {
+    if (this.jobs.has(id)) {
+      throw new Error(`Generation job already exists: ${id}`);
+    }
+
+    const controller = new AbortController();
+    const job = {
+      id,
+      userId,
+      run,
+      controller,
+      status: 'queued',
+      promise: null,
+      resolve: null,
+      reject: null,
+    };
+    job.promise = new Promise((resolve, reject) => {
+      job.resolve = resolve;
+      job.reject = reject;
+    });
+
+    this.jobs.set(id, job);
+    this.queuedJobs.push(job);
+    this.drain();
+    return {
+      promise: job.promise,
+      queuePosition: this.queuedJobs.findIndex((queuedJob) => queuedJob.id === id) + 1,
+    };
+  }
+
+  cancel(id, userId) {
+    const job = this.jobs.get(id);
+    if (!job) {
+      return { ok: false, status: 'not_found' };
+    }
+    if (job.userId !== userId) {
+      return { ok: false, status: 'forbidden' };
+    }
+
+    if (job.status === 'queued') {
+      this.queuedJobs = this.queuedJobs.filter((queuedJob) => queuedJob.id !== id);
+      this.jobs.delete(id);
+      job.status = 'cancelled';
+      job.reject(createJobCanceledError());
+      return { ok: true, status: 'cancelled_queued' };
+    }
+
+    if (job.status === 'active') {
+      job.controller.abort();
+      return { ok: true, status: 'cancelling_active' };
+    }
+
+    return { ok: false, status: job.status };
+  }
+
+  drain() {
+    if (this.activeJob || this.queuedJobs.length === 0) {
+      return;
+    }
+
+    const job = this.queuedJobs.shift();
+    this.activeJob = job;
+    job.status = 'active';
+
+    Promise.resolve()
+      .then(() => job.run(job.controller.signal))
+      .then((result) => {
+        job.status = 'completed';
+        job.resolve(result);
+      })
+      .catch((err) => {
+        job.status = isJobCanceledError(err) ? 'cancelled' : 'failed';
+        job.reject(err);
+      })
+      .finally(() => {
+        this.jobs.delete(job.id);
+        this.activeJob = null;
+        this.drain();
+      });
+  }
+}
+
+const generationQueue = new GenerationJobQueue();
 
 function createVoiceCloningMcpServer() {
   const server = new McpServer({
@@ -573,13 +723,21 @@ function createVoiceCloningMcpServer() {
       mimeType,
       filename: voiceSampleFilename,
     });
-    const { jobId, data, engine: selectedEngine } = await generateClonedAudio({
-      text,
-      refWav: wavPath,
-      format: 'mp3',
-      engine,
-      language,
+    const mcpJobId = randomUUID();
+    const { promise } = generationQueue.submit({
+      id: mcpJobId,
+      userId: 'mcp',
+      run: (signal) => generateClonedAudio({
+        text,
+        refWav: wavPath,
+        format: 'mp3',
+        engine,
+        language,
+        jobId: mcpJobId,
+        signal,
+      }),
     });
+    const { jobId, data, engine: selectedEngine } = await promise;
 
     return {
       content: [
@@ -737,15 +895,36 @@ fastify.post('/api/upload-voice', async (request, reply) => {
   return { voiceId, language };
 });
 
+fastify.post('/api/generate/:jobId/cancel', async (request, reply) => {
+  const { jobId } = request.params || {};
+  if (!isValidJobId(jobId)) {
+    return reply.code(400).send({ error: 'Invalid generation jobId.' });
+  }
+
+  const result = generationQueue.cancel(jobId, request.user.id);
+  if (result.status === 'forbidden') {
+    return reply.code(403).send({ error: 'Cannot cancel another user’s generation job.' });
+  }
+  if (result.status === 'not_found') {
+    return reply.code(404).send({ error: 'Generation job not found.' });
+  }
+
+  return { ok: result.ok, status: result.status, jobId };
+});
+
 /**
  * POST /api/generate
- * JSON body: { voiceId, text, language, engine }
+ * JSON body: { jobId, voiceId, text, language, engine }
  * Runs the selected voice cloning engine, converts the result to WebM/Opus,
  * and streams it back.
  */
 fastify.post('/api/generate', async (request, reply) => {
-  const { voiceId, text, language, engine } = request.body || {};
+  const { jobId, voiceId, text, language, engine } = request.body || {};
 
+  const generationJobId = jobId || randomUUID();
+  if (!isValidJobId(generationJobId)) {
+    return reply.code(400).send({ error: 'Invalid generation jobId.' });
+  }
   if (!voiceId || typeof voiceId !== 'string') {
     return reply.code(400).send({ error: 'voiceId is required.' });
   }
@@ -768,19 +947,41 @@ fastify.post('/api/generate', async (request, reply) => {
   }
 
   let result;
-  const generationStartedAt = process.hrtime.bigint();
+  let generationStartedAt = null;
   try {
-    result = await generateClonedAudio({ text, refWav, format: 'webm', engine, language });
+    const { promise } = generationQueue.submit({
+      id: generationJobId,
+      userId: request.user.id,
+      run: (signal) => {
+        generationStartedAt = process.hrtime.bigint();
+        return generateClonedAudio({
+          text,
+          refWav,
+          format: 'webm',
+          engine,
+          language,
+          jobId: generationJobId,
+          signal,
+        });
+      },
+    });
+    result = await promise;
   } catch (err) {
+    if (isJobCanceledError(err)) {
+      return reply.code(409).send({ error: 'Generation job was cancelled.', jobId: generationJobId });
+    }
     fastify.log.error(err);
     return reply.code(500).send({ error: 'Failed to generate cloned audio.', detail: err.message });
   }
-  const generationDurationSeconds = Number(process.hrtime.bigint() - generationStartedAt) / 1_000_000_000;
+  const generationDurationSeconds = generationStartedAt
+    ? Number(process.hrtime.bigint() - generationStartedAt) / 1_000_000_000
+    : 0;
 
   reply
     .header('Content-Type', 'audio/webm')
     .header('Content-Disposition', `inline; filename="${result.jobId}.webm"`)
     .header('Content-Length', result.data.length)
+    .header('X-Generation-Job-Id', result.jobId)
     .header('X-Language', language || '')
     .header('X-Voice-Cloning-Engine', result.engine)
     .header('X-Generation-Duration-Seconds', generationDurationSeconds.toFixed(2))

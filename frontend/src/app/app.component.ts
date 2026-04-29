@@ -69,6 +69,8 @@ export class AppComponent implements OnDestroy {
   voiceId = signal<string | null>(null);
   uploading = signal<boolean>(false);
   generating = signal<boolean>(false);
+  cancellingGeneration = signal<boolean>(false);
+  currentGenerationJobId = signal<string | null>(null);
 
   generatedUrl = signal<string | null>(null);
   generationSeconds = signal<string | null>(null);
@@ -147,6 +149,9 @@ export class AppComponent implements OnDestroy {
   }
 
   async logout(): Promise<void> {
+    if (this.generating()) {
+      await this.cancelGeneration();
+    }
     await this.auth.logout();
     this.clearRecording();
     this.revokeUrl(this.generatedUrl());
@@ -246,12 +251,15 @@ export class AppComponent implements OnDestroy {
 
     this.error.set(null);
     this.generating.set(true);
+    const jobId = this.createId();
+    this.currentGenerationJobId.set(jobId);
     this.revokeUrl(this.generatedUrl());
     this.generatedUrl.set(null);
     this.generationSeconds.set(null);
 
     try {
       const res = await this.api.generate({
+        jobId,
         voiceId: id,
         text: textVal,
         language: this.textLanguage(),
@@ -272,9 +280,31 @@ export class AppComponent implements OnDestroy {
       } else if (err?.error?.error) {
         detail = err.error.error;
       }
-      this.error.set(`Generation failed: ${detail}`);
+      if (String(detail).toLowerCase().includes('cancelled')) {
+        this.error.set(null);
+      } else {
+        this.error.set(`Generation failed: ${detail}`);
+      }
     } finally {
       this.generating.set(false);
+      this.cancellingGeneration.set(false);
+      if (this.currentGenerationJobId() === jobId) {
+        this.currentGenerationJobId.set(null);
+      }
+    }
+  }
+
+  async cancelGeneration(): Promise<void> {
+    const jobId = this.currentGenerationJobId();
+    if (!jobId || this.cancellingGeneration()) return;
+
+    this.cancellingGeneration.set(true);
+    try {
+      await this.api.cancelGeneration(jobId).toPromise();
+    } catch (err: any) {
+      const detail = err?.error?.error || err?.message || err;
+      this.error.set(`Cancel failed: ${detail}`);
+      this.cancellingGeneration.set(false);
     }
   }
 

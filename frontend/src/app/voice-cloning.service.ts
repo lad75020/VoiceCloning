@@ -9,6 +9,7 @@ export interface UploadVoiceResponse {
 }
 
 export interface GenerateRequest {
+  jobId: string;
   voiceId: string;
   text: string;
   language: string;
@@ -39,5 +40,13 @@ export class VoiceCloningService {
       responseType: 'blob',
       observe: 'response',
     });
+  }
+
+  cancelGeneration(jobId: string): Observable<{ ok: boolean; status: string; jobId: string }> {
+    return this.http.post<{ ok: boolean; status: string; jobId: string }>(
+      `${this.baseUrl}/generate/${jobId}/cancel`,
+      {},
+      { headers: this.auth.authHeaders() },
+    );
   }
 }

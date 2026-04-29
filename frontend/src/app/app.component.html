@@ -323,6 +323,20 @@
             }
           </button>
 
+          @if (generating()) {
+            <button type="button"
+                    class="vc-btn vc-btn-ghost vc-btn-lg"
+                    (click)="cancelGeneration()"
+                    [disabled]="cancellingGeneration()">
+              @if (cancellingGeneration()) {
+                <span class="vc-spinner"></span>
+                <span>Cancelling…</span>
+              } @else {
+                <span>Cancel</span>
+              }
+            </button>
+          }
+
           @if (!voiceId()) {
             <div class="vc-hint">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

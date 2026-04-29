@@ -130,8 +130,10 @@ Response: `{ "voiceId": "<uuid>", "language": "en" }`. The file is transcoded to
 ### `POST /api/generate` (JSON)
 
 ```json
-{ "voiceId": "…", "text": "Hello world.", "language": "en", "engine": "omnivoice" }
+{ "jobId": "…", "voiceId": "…", "text": "Hello world.", "language": "en", "engine": "omnivoice" }
 ```
+
+`jobId` is optional for API clients, but the frontend supplies it so the job can be cancelled. The backend runs only one generation job at a time; simultaneous requests are queued in memory and processed in order.
 
 Supported `engine` values are `omnivoice` and `mlx-qwen`. OmniVoice runs:
 
@@ -159,6 +161,10 @@ conda run -n "$MLX_CONDA_ENV" --no-capture-output \
 ```
 
 The generated WAV is converted to WebM/Opus and streamed back as `audio/webm`.
+
+### `POST /api/generate/:jobId/cancel`
+
+Cancels a queued or active generation job for the authenticated user. Active jobs abort the server-side child process before the next queued job starts.
 
 ### `GET /api/health`
 
