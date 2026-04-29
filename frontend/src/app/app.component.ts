@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { AudioRecorderService } from './audio-recorder.service';
 import { VoiceCloningService } from './voice-cloning.service';
+import { AuthService } from './auth.service';
 
 interface LanguageOption {
   code: string;
@@ -33,8 +34,10 @@ interface StoredVoiceSample {
 })
 export class AppComponent implements OnDestroy {
   private readonly storedVoicesKey = 'voice-cloning.stored-voices.v1';
+  private readonly themeKey = 'voice-cloning.theme.v1';
   private themeMediaQuery: MediaQueryList | null = null;
   private themeChangeListener: ((event: MediaQueryListEvent) => void) | null = null;
+  private themeOverride: 'light' | 'dark' | null = null;
 
   readonly engines: EngineOption[] = [
     { id: 'omnivoice', label: 'OmniVoice' },
@@ -51,6 +54,10 @@ export class AppComponent implements OnDestroy {
   textLanguage = signal<string>('en');
   engine = signal<string>('omnivoice');
   text = signal<string>('');
+  loginUsername = signal<string>('');
+  loginPassword = signal<string>('');
+  loginError = signal<string | null>(null);
+  loggingIn = signal<boolean>(false);
   voiceName = signal<string>('');
   storedVoices = signal<StoredVoiceSample[]>([]);
   selectedStoredVoiceId = signal<string | null>(null);
@@ -78,9 +85,11 @@ export class AppComponent implements OnDestroy {
   constructor(
     private recorder: AudioRecorderService,
     private api: VoiceCloningService,
+    public auth: AuthService,
   ) {
     this.loadStoredVoices();
     this.watchSystemTheme();
+    this.auth.refreshSession();
   }
 
   ngOnDestroy(): void {
@@ -114,6 +123,36 @@ export class AppComponent implements OnDestroy {
         this.error.set(`Microphone error: ${err?.message || err}`);
       }
     }
+  }
+
+  async login(): Promise<void> {
+    const username = this.loginUsername().trim();
+    const password = this.loginPassword();
+    if (!username || !password) {
+      this.loginError.set('Username and password are required.');
+      return;
+    }
+
+    this.loginError.set(null);
+    this.loggingIn.set(true);
+    try {
+      await this.auth.login(username, password);
+      this.loginPassword.set('');
+      this.error.set(null);
+    } catch (err: any) {
+      this.loginError.set(err?.error?.error || err?.message || 'Login failed.');
+    } finally {
+      this.loggingIn.set(false);
+    }
+  }
+
+  async logout(): Promise<void> {
+    await this.auth.logout();
+    this.clearRecording();
+    this.revokeUrl(this.generatedUrl());
+    this.generatedUrl.set(null);
+    this.error.set(null);
+    this.loginError.set(null);
   }
 
   private setRecordedBlob(blob: Blob): void {
@@ -322,10 +361,24 @@ export class AppComponent implements OnDestroy {
       return;
     }
 
+    try {
+      const stored = window.localStorage?.getItem(this.themeKey);
+      if (stored === 'light' || stored === 'dark') this.themeOverride = stored;
+    } catch { /* ignore */ }
+
     this.themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    this.applyColorMode(this.themeMediaQuery.matches);
-    this.themeChangeListener = (event) => this.applyColorMode(event.matches);
+    this.applyColorMode(this.themeOverride ? this.themeOverride === 'dark' : this.themeMediaQuery.matches);
+    this.themeChangeListener = (event) => {
+      if (!this.themeOverride) this.applyColorMode(event.matches);
+    };
     this.themeMediaQuery.addEventListener('change', this.themeChangeListener);
+  }
+
+  toggleTheme(): void {
+    const currentDark = document.documentElement.getAttribute('data-bs-theme') !== 'light';
+    this.themeOverride = currentDark ? 'light' : 'dark';
+    try { window.localStorage?.setItem(this.themeKey, this.themeOverride); } catch { /* ignore */ }
+    this.applyColorMode(this.themeOverride === 'dark');
   }
 
   private applyColorMode(prefersDark: boolean): void {

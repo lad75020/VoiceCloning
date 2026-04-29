@@ -4,13 +4,14 @@ SPA for cloning a voice using [OmniVoice](https://huggingface.co/k2-fsa/OmniVoic
 
 - **Frontend:** Angular 19 + Bootstrap 5 (standalone components, signals, `@for`/`@if` control flow).
 - **Backend:** Node.js + Fastify.
+- **Auth:** JWT bearer tokens backed by a server-side SQLite users/sessions database.
 - **MCP:** Streamable HTTP endpoint for agents at `/mcp`.
 - **Inference:** `omnivoice-infer` CLI or `mlx-audio` Qwen3-TTS running inside configured conda envs.
 - **Audio pipeline:** Browser or MCP client sends audio → server converts to mono 16 kHz WAV → selected engine generates WAV → server converts to WebM/Opus for HTTP UI or MP3 for MCP.
 
 ## Requirements
 
-- Node.js 20+ (tested on 25)
+- Node.js 24+ with `node:sqlite` support (tested on 25)
 - `ffmpeg` on `PATH`
 - A working conda env named `omnivoice` with `omnivoice-infer` installed (default lookup: `/Volumes/WDBlack4TB/opt/miniconda3`)
 - For MLX/Qwen: an Apple Silicon-compatible Python/conda env with `mlx-audio` installed:
@@ -34,6 +35,11 @@ Optional environment overrides:
 | `MAX_TEXT_LENGTH`        | `5000`                                |
 | `MAX_AUDIO_SAMPLE_BYTES` | `104857600`                           |
 | `BODY_LIMIT`             | derived from `MAX_AUDIO_SAMPLE_BYTES` |
+| `AUTH_DB_PATH`           | `backend/data/auth.sqlite`            |
+| `AUTH_JWT_SECRET`        | generated and persisted in SQLite     |
+| `AUTH_SESSION_TTL_SECONDS` | `43200`                             |
+| `AUTH_INITIAL_USERNAME`  | unset                                 |
+| `AUTH_INITIAL_PASSWORD`  | unset                                 |
 
 ## Install
 
@@ -71,11 +77,46 @@ cd ../backend && npm start
 
 The backend detects the built frontend at `frontend/dist/voice-cloning-frontend/browser` and serves it alongside the API at http://localhost:17992.
 
+If there are no users in the auth database and `AUTH_INITIAL_USERNAME` plus `AUTH_INITIAL_PASSWORD` are set, the backend creates that initial user on startup. Otherwise, create users with the script before logging in.
+
+Manage users with the backend scripts:
+
+```bash
+cd backend
+npm run user:add -- alice "correct horse battery staple"
+npm run user:list
+npm run user:delete -- alice
+```
+
 ## Browser voice library
 
 The frontend can save recorded reference samples by name in browser `localStorage`. Selecting a saved voice restores the local audio sample and uploads it to the backend again so generation has a current server-side `voiceId`. Browser storage quotas apply, so very long recordings may fail to save locally.
 
 ## HTTP API
+
+All `/api/*` routes except `POST /api/auth/login` require:
+
+```
+Authorization: Bearer <jwt>
+```
+
+Sessions are stored in SQLite and can be revoked with logout.
+
+### `POST /api/auth/login`
+
+```json
+{ "username": "alice", "password": "correct horse battery staple" }
+```
+
+Response: `{ "token": "<jwt>", "expiresAt": "...", "user": { ... } }`.
+
+### `GET /api/auth/me`
+
+Returns the authenticated user and session.
+
+### `POST /api/auth/logout`
+
+Revokes the current session.
 
 ### `POST /api/upload-voice` (multipart)
 
@@ -125,7 +166,7 @@ Returns `{ "status": "ok" }`.
 
 ## MCP API
 
-The backend also exposes a stateless Streamable HTTP MCP endpoint:
+The backend also exposes a Streamable HTTP MCP endpoint. It requires the same bearer token authentication:
 
 ```
 POST http://localhost:17992/mcp
@@ -154,11 +195,13 @@ VoiceCloning/
 │   ├── server.js          # Fastify app, routes, ffmpeg + inference glue
 │   ├── package.json
 │   ├── uploads/           # stored reference WAVs
-│   └── outputs/           # generated WAV + WebM
+│   ├── outputs/           # generated WAV + WebM
+│   └── data/              # SQLite auth database
 └── frontend/
     ├── angular.json
     └── src/app/
         ├── app.component.{ts,html,scss}
+        ├── auth.service.ts
         ├── audio-recorder.service.ts
         └── voice-cloning.service.ts
 ```

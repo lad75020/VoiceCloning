@@ -1,199 +1,381 @@
-<nav class="navbar app-navbar border-bottom">
-  <div class="container">
-    <span class="navbar-brand mb-0 h1">Voice Cloning Studio</span>
-  </div>
-</nav>
-
-<main class="container py-4">
-  <p class="text-muted">
-    Record a short sample of your voice, enter text, and generate speech in your cloned voice using OmniVoice or MLX/Qwen.
-  </p>
-
-  @if (error()) {
-    <div class="alert alert-danger" role="alert">{{ error() }}</div>
-  }
-
-  <div class="row g-4">
-    <!-- Step 1: Record voice -->
-    <div class="col-lg-6">
-      <div class="card shadow-sm h-100">
-        <div class="card-header app-card-header">
-          <strong>Step 1 — Record your voice</strong>
+<div class="vc-shell">
+  <!-- Top nav -->
+  <header class="vc-nav">
+    <div class="vc-nav-inner">
+      <div class="vc-brand">
+        <span class="vc-logo" aria-hidden="true">
+          <img src="/web-app-manifest-192x192.png" width="38" height="38" alt="">
+        </span>
+        <div class="vc-brand-text">
+          <span class="vc-brand-name">Voice Cloning</span>
+          <span class="vc-brand-tag">Studio</span>
         </div>
-        <div class="card-body">
-          <label class="form-label" for="recordLang">Recording language</label>
-          <select id="recordLang" class="form-select mb-3"
-                  [ngModel]="recordLanguage()"
-                  (ngModelChange)="recordLanguage.set($event)">
-            @for (lang of languages; track lang.code) {
-              <option [value]="lang.code">{{ lang.label }}</option>
-            }
-          </select>
+      </div>
 
-          <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
-            <button class="btn"
-                    [class.btn-danger]="isRecording()"
-                    [class.btn-success]="!isRecording()"
-                    (click)="toggleRecording()"
-                    [disabled]="uploading()">
-              @if (isRecording()) {
-                <span class="spinner-grow spinner-grow-sm me-2" role="status"></span>
-                Stop recording
+      <div class="vc-nav-actions">
+        <span class="vc-status-pill">
+          <span class="vc-dot" [class.vc-dot-ok]="!!voiceId()" [class.vc-dot-busy]="uploading() || generating()"></span>
+          @if (!auth.isAuthenticated()) { Login required }
+          @else if (uploading()) { Uploading… }
+          @else if (generating()) { Synthesizing… }
+          @else if (voiceId()) { Voice ready }
+          @else { Idle }
+        </span>
+        @if (auth.isAuthenticated()) {
+          @if (auth.user()) {
+            <span class="vc-user-name">{{ auth.user()!.username }}</span>
+          }
+          <button type="button" class="vc-btn vc-btn-ghost vc-btn-nav" (click)="logout()">
+            Log out
+          </button>
+        }
+        <button type="button" class="vc-icon-btn" (click)="toggleTheme()" [attr.aria-label]="'Toggle theme'">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="4"/>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="vc-main">
+    @if (!auth.isAuthenticated()) {
+      <section class="vc-card vc-login-card">
+        <div class="vc-card-head">
+          <span class="vc-step">→</span>
+          <div>
+            <h2 class="vc-card-title">Log in</h2>
+            <p class="vc-card-sub">Authentication is required to use the voice cloning API.</p>
+          </div>
+        </div>
+
+        <div class="vc-card-body">
+          @if (loginError()) {
+            <div class="vc-alert" role="alert">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>
+              </svg>
+              <span>{{ loginError() }}</span>
+              <button type="button" class="vc-alert-close" (click)="loginError.set(null)" aria-label="Dismiss">×</button>
+            </div>
+          }
+
+          <form class="vc-login-form" (ngSubmit)="login()">
+            <div class="vc-field">
+              <label class="vc-label" for="loginUsername">Username</label>
+              <input id="loginUsername"
+                     name="username"
+                     type="text"
+                     class="vc-input"
+                     autocomplete="username"
+                     [ngModel]="loginUsername()"
+                     (ngModelChange)="loginUsername.set($event)"
+                     [disabled]="loggingIn()">
+            </div>
+
+            <div class="vc-field">
+              <label class="vc-label" for="loginPassword">Password</label>
+              <input id="loginPassword"
+                     name="password"
+                     type="password"
+                     class="vc-input"
+                     autocomplete="current-password"
+                     [ngModel]="loginPassword()"
+                     (ngModelChange)="loginPassword.set($event)"
+                     [disabled]="loggingIn()">
+            </div>
+
+            <button type="submit" class="vc-btn vc-btn-primary vc-btn-lg" [disabled]="loggingIn()">
+              @if (loggingIn()) {
+                <span class="vc-spinner"></span>
+                <span>Logging in…</span>
               } @else {
-                Start recording
+                <span>Log in</span>
               }
             </button>
+          </form>
+        </div>
+      </section>
+    } @else {
+    <!-- Hero -->
+    <section class="vc-hero">
+      <span class="vc-eyebrow">AI VOICE SYNTHESIS</span>
+      <h1 class="vc-title">
+        Clone any voice in
+        <span class="vc-grad-text">seconds.</span>
+      </h1>
+      <p class="vc-subtitle">
+        Record a short reference, type what you want to say, and generate
+        natural speech using OmniVoice or MLX/Qwen.
+      </p>
+    </section>
 
-            @if (recordedBlobUrl() && !isRecording()) {
-              <button class="btn btn-outline-secondary"
-                      (click)="clearRecording()"
-                      [disabled]="uploading() || generating()">
-                Clear
-              </button>
-            }
+    @if (error()) {
+      <div class="vc-alert" role="alert">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>
+        </svg>
+        <span>{{ error() }}</span>
+        <button type="button" class="vc-alert-close" (click)="error.set(null)" aria-label="Dismiss">×</button>
+      </div>
+    }
 
-            @if (uploading()) {
-              <span class="text-muted ms-2">
-                <span class="spinner-border spinner-border-sm me-1"></span>
-                Uploading &amp; converting&hellip;
+    <div class="vc-grid">
+      <!-- Step 1: Record -->
+      <section class="vc-card">
+        <div class="vc-card-head">
+          <span class="vc-step">01</span>
+          <div>
+            <h2 class="vc-card-title">Capture a reference</h2>
+            <p class="vc-card-sub">Speak naturally for ~10 seconds.</p>
+          </div>
+        </div>
+
+        <div class="vc-card-body">
+          <div class="vc-mic-stage">
+            <button type="button"
+                    class="vc-mic"
+                    [class.vc-mic-rec]="isRecording()"
+                    (click)="toggleRecording()"
+                    [disabled]="uploading()">
+              <span class="vc-mic-ring vc-mic-ring-1"></span>
+              <span class="vc-mic-ring vc-mic-ring-2"></span>
+              <span class="vc-mic-ring vc-mic-ring-3"></span>
+              <span class="vc-mic-core">
+                @if (isRecording()) {
+                  <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+                } @else {
+                  <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="3" width="6" height="12" rx="3"/>
+                    <path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>
+                  </svg>
+                }
               </span>
-            }
+            </button>
+            <div class="vc-mic-label">
+              @if (isRecording()) { <span class="vc-pulse-text">Recording — tap to stop</span> }
+              @else if (uploading()) { Processing audio… }
+              @else if (recordedBlobUrl()) { Tap to re-record }
+              @else { Tap microphone to start }
+            </div>
+          </div>
+
+          <div class="vc-field">
+            <label class="vc-label" for="recordLang">Language</label>
+            <div class="vc-seg">
+              @for (lang of languages; track lang.code) {
+                <button type="button"
+                        class="vc-seg-btn"
+                        [class.vc-seg-on]="recordLanguage() === lang.code"
+                        (click)="recordLanguage.set(lang.code)"
+                        [disabled]="uploading()">
+                  {{ lang.label }}
+                </button>
+              }
+            </div>
           </div>
 
           @if (recordedBlobUrl()) {
-            <div class="mb-2">
-              <label class="form-label small text-muted">Your recording</label>
-              <audio controls [src]="recordedBlobUrl()!" class="w-100"></audio>
+            <div class="vc-field">
+              <label class="vc-label">Preview</label>
+              <audio controls [src]="recordedBlobUrl()!" class="vc-audio"></audio>
             </div>
 
-            <div class="input-group mb-3">
-              <input type="text"
-                     class="form-control"
-                     placeholder="Voice name"
-                     aria-label="Voice name"
-                     [ngModel]="voiceName()"
-                     (ngModelChange)="voiceName.set($event)"
-                     [disabled]="uploading()">
-              <button class="btn btn-outline-primary"
-                      type="button"
-                      (click)="saveCurrentVoice()"
-                      [disabled]="!canSaveVoice()">
-                Save voice
-              </button>
+            <div class="vc-field">
+              <label class="vc-label" for="voiceNameInput">Save this voice</label>
+              <div class="vc-input-row">
+                <input id="voiceNameInput"
+                       type="text"
+                       class="vc-input"
+                       placeholder="Name your voice…"
+                       [ngModel]="voiceName()"
+                       (ngModelChange)="voiceName.set($event)"
+                       [disabled]="uploading()">
+                <button type="button"
+                        class="vc-btn vc-btn-ghost"
+                        (click)="saveCurrentVoice()"
+                        [disabled]="!canSaveVoice()">
+                  Save
+                </button>
+                <button type="button"
+                        class="vc-btn vc-btn-ghost vc-btn-icon"
+                        (click)="clearRecording()"
+                        [disabled]="uploading() || generating()"
+                        aria-label="Clear recording">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                  </svg>
+                </button>
+              </div>
             </div>
           }
 
-          <label class="form-label" for="storedVoice">Available voices</label>
-          <div class="input-group mb-3">
-            <select id="storedVoice"
-                    class="form-select"
-                    [ngModel]="selectedStoredVoiceId() || ''"
-                    (ngModelChange)="selectStoredVoice($event)"
-                    [disabled]="uploading() || generating() || storedVoices().length === 0">
-              @if (storedVoices().length) {
-                <option value="" disabled>Select a saved voice</option>
-              } @else {
-                <option value="" disabled>No saved voices</option>
-              }
-              @for (voice of storedVoices(); track voice.id) {
-                <option [value]="voice.id">{{ voice.name }}</option>
-              }
-            </select>
-            <button class="btn btn-outline-danger"
-                    type="button"
-                    (click)="deleteStoredVoice(selectedStoredVoiceId()!)"
-                    [disabled]="!selectedStoredVoiceId() || uploading() || generating()">
-              Delete
-            </button>
+          <div class="vc-field">
+            <div class="vc-label-row">
+              <span class="vc-label">Voice library</span>
+              <span class="vc-count">{{ storedVoices().length }} saved</span>
+            </div>
+
+            @if (storedVoices().length) {
+              <div class="vc-chip-row">
+                @for (voice of storedVoices(); track voice.id) {
+                  <button type="button"
+                          class="vc-chip"
+                          [class.vc-chip-on]="selectedStoredVoiceId() === voice.id"
+                          (click)="selectStoredVoice(voice.id)"
+                          [disabled]="uploading() || generating()">
+                    <span class="vc-chip-dot"></span>
+                    <span class="vc-chip-name">{{ voice.name }}</span>
+                    <span class="vc-chip-x"
+                          (click)="$event.stopPropagation(); deleteStoredVoice(voice.id)"
+                          aria-label="Delete voice">×</span>
+                  </button>
+                }
+              </div>
+            } @else {
+              <div class="vc-empty">No saved voices yet — record one above.</div>
+            }
           </div>
 
           @if (voiceId()) {
-            <div class="alert alert-success py-2 mb-0 small">
-              Voice reference ready (id: <code>{{ voiceId() }}</code>)
+            <div class="vc-success-pill">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 6L9 17l-5-5"/>
+              </svg>
+              Voice ready · <code class="mono">{{ voiceId()!.slice(0, 8) }}</code>
             </div>
           }
         </div>
-      </div>
-    </div>
+      </section>
 
-    <!-- Step 2: Enter text & generate -->
-    <div class="col-lg-6">
-      <div class="card shadow-sm h-100">
-        <div class="card-header app-card-header">
-          <strong>Step 2 — Enter text to speak</strong>
+      <!-- Step 2: Generate -->
+      <section class="vc-card">
+        <div class="vc-card-head">
+          <span class="vc-step">02</span>
+          <div>
+            <h2 class="vc-card-title">Compose &amp; synthesize</h2>
+            <p class="vc-card-sub">Pick an engine, type your script.</p>
+          </div>
         </div>
-        <div class="card-body d-flex flex-column">
-          <label class="form-label" for="engineSelect">Voice cloning solution</label>
-          <div id="engineSelect" class="btn-group mb-3" role="group" aria-label="Voice cloning solution">
-            @for (option of engines; track option.id) {
-              <input type="radio"
-                     class="btn-check"
-                     name="voiceEngine"
-                     [id]="'engine-' + option.id"
-                     [value]="option.id"
-                     [ngModel]="engine()"
-                     (ngModelChange)="engine.set($event)"
-                     [disabled]="generating()">
-              <label class="btn btn-outline-primary" [for]="'engine-' + option.id">
-                {{ option.label }}
-              </label>
-            }
+
+        <div class="vc-card-body">
+          <div class="vc-field">
+            <label class="vc-label">Engine</label>
+            <div class="vc-engine-row">
+              @for (option of engines; track option.id) {
+                <button type="button"
+                        class="vc-engine"
+                        [class.vc-engine-on]="engine() === option.id"
+                        (click)="engine.set(option.id)"
+                        [disabled]="generating()">
+                  <span class="vc-engine-mark"></span>
+                  <span class="vc-engine-name">{{ option.label }}</span>
+                  <span class="vc-engine-sub">
+                    {{ option.id === 'omnivoice' ? 'k2-fsa · multilingual' : 'Apple Silicon · MLX' }}
+                  </span>
+                </button>
+              }
+            </div>
           </div>
 
-          <label class="form-label" for="textLang">Text language</label>
-          <select id="textLang" class="form-select mb-3"
-                  [ngModel]="textLanguage()"
-                  (ngModelChange)="textLanguage.set($event)">
-            @for (lang of languages; track lang.code) {
-              <option [value]="lang.code">{{ lang.label }}</option>
-            }
-          </select>
+          <div class="vc-field">
+            <label class="vc-label" for="textLang">Output language</label>
+            <div class="vc-seg">
+              @for (lang of languages; track lang.code) {
+                <button type="button"
+                        class="vc-seg-btn"
+                        [class.vc-seg-on]="textLanguage() === lang.code"
+                        (click)="textLanguage.set(lang.code)"
+                        [disabled]="generating()">
+                  {{ lang.label }}
+                </button>
+              }
+            </div>
+          </div>
 
-          <label class="form-label" for="textInput">Text</label>
-          <textarea id="textInput" class="form-control mb-3" rows="6"
-                    placeholder="Type the text you want to synthesize…"
-                    [ngModel]="text()"
-                    (ngModelChange)="text.set($event)"
-                    [disabled]="generating()"></textarea>
+          <div class="vc-field vc-field-grow">
+            <div class="vc-label-row">
+              <label class="vc-label" for="textInput">Script</label>
+              <span class="vc-count mono">{{ text().length }} / 5000</span>
+            </div>
+            <textarea id="textInput"
+                      class="vc-textarea"
+                      rows="7"
+                      placeholder="Type the words you want spoken in the cloned voice…"
+                      [ngModel]="text()"
+                      (ngModelChange)="text.set($event)"
+                      [disabled]="generating()"></textarea>
+          </div>
 
-          <button class="btn btn-primary mt-auto"
+          <button type="button"
+                  class="vc-btn vc-btn-primary vc-btn-lg"
                   (click)="generate()"
                   [disabled]="!canGenerate()">
             @if (generating()) {
-              <span class="spinner-border spinner-border-sm me-2"></span>
-              Generating&hellip;
+              <span class="vc-spinner"></span>
+              <span>Synthesizing speech…</span>
             } @else {
-              Generate
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 3l14 9-14 9V3z"/>
+              </svg>
+              <span>Generate speech</span>
             }
           </button>
+
+          @if (!voiceId()) {
+            <div class="vc-hint">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
+              </svg>
+              Record or pick a voice first.
+            </div>
+          }
         </div>
-      </div>
+      </section>
     </div>
-  </div>
 
-  <!-- Result -->
-  @if (generatedUrl()) {
-    <div class="card shadow-sm mt-4">
-      <div class="card-header app-card-header app-card-header-success">
-        <strong>Result</strong>
-      </div>
-      <div class="card-body">
-        @if (generationSeconds()) {
-          <div class="text-muted small mb-2">
-            Generated in {{ generationSeconds() }} seconds
+    <!-- Result -->
+    @if (generatedUrl()) {
+      <section class="vc-card vc-result">
+        <div class="vc-card-head">
+          <span class="vc-step vc-step-done">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 6L9 17l-5-5"/>
+            </svg>
+          </span>
+          <div>
+            <h2 class="vc-card-title">Generated audio</h2>
+            <p class="vc-card-sub">
+              @if (generationSeconds()) {
+                Synthesized in <span class="mono">{{ generationSeconds() }}s</span>
+              } @else {
+                Ready to play
+              }
+            </p>
           </div>
-        }
-        <audio controls [src]="generatedUrl()!" class="w-100"></audio>
-        <a class="btn btn-outline-success btn-sm mt-2"
-           [href]="generatedUrl()!"
-           download="generated.webm">
-          Download
-        </a>
-      </div>
-    </div>
-  }
+        </div>
+        <div class="vc-card-body">
+          <div class="vc-result-player">
+            <audio controls [src]="generatedUrl()!" class="vc-audio"></audio>
+          </div>
+          <a class="vc-btn vc-btn-ghost"
+             [href]="generatedUrl()!"
+             download="voice-cloning-output.webm">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+            </svg>
+            Download
+          </a>
+        </div>
+      </section>
+    }
 
-  <footer class="text-center text-muted small mt-5">
-    Powered by OmniVoice · MLX/Qwen · Fastify · Angular · Bootstrap
-  </footer>
-</main>
+    <footer class="vc-footer">
+      <span>OmniVoice · MLX/Qwen · Fastify · Angular</span>
+      <span class="vc-foot-dot">•</span>
+      <span class="mono">https://mac-studio.tail4d2ab4.ts.net:17992</span>
+    </footer>
+    }
+  </main>
+</div>

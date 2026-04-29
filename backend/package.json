@@ -6,7 +6,10 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "user:add": "node scripts/users.js add",
+    "user:delete": "node scripts/users.js delete",
+    "user:list": "node scripts/users.js list"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

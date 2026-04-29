@@ -11,13 +11,21 @@ import { createWriteStream } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { pipeline } from 'stream/promises';
-import { randomUUID } from 'crypto';
+import {
+  createHmac,
+  pbkdf2Sync,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from 'crypto';
+import { DatabaseSync } from 'node:sqlite';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const OUTPUTS_DIR = path.join(__dirname, 'outputs');
+const DATA_DIR = path.join(__dirname, 'data');
 
 // Environment configuration
 const CONDA_BASE = process.env.CONDA_BASE || '/Volumes/WDBlack4TB/opt/miniconda3';
@@ -32,6 +40,11 @@ const HOST = process.env.HOST || '0.0.0.0';
 const MAX_TEXT_LENGTH = parseInt(process.env.MAX_TEXT_LENGTH || '5000', 10);
 const MAX_AUDIO_SAMPLE_BYTES = parseInt(process.env.MAX_AUDIO_SAMPLE_BYTES || `${100 * 1024 * 1024}`, 10);
 const BODY_LIMIT = parseInt(process.env.BODY_LIMIT || `${Math.ceil(MAX_AUDIO_SAMPLE_BYTES * 1.4) + 1024 * 1024}`, 10);
+const AUTH_DB_PATH = process.env.AUTH_DB_PATH || path.join(DATA_DIR, 'auth.sqlite');
+let AUTH_JWT_SECRET = process.env.AUTH_JWT_SECRET || null;
+const AUTH_SESSION_TTL_SECONDS = parseInt(process.env.AUTH_SESSION_TTL_SECONDS || `${12 * 60 * 60}`, 10);
+const AUTH_INITIAL_USERNAME = process.env.AUTH_INITIAL_USERNAME || null;
+const AUTH_INITIAL_PASSWORD = process.env.AUTH_INITIAL_PASSWORD || null;
 
 const AUDIO_EXT_BY_MIME = {
   'audio/aac': 'aac',
@@ -60,6 +73,55 @@ const VOICE_CLONING_ENGINES = {
 
 await fs.mkdir(UPLOADS_DIR, { recursive: true });
 await fs.mkdir(OUTPUTS_DIR, { recursive: true });
+await fs.mkdir(DATA_DIR, { recursive: true });
+
+const authDb = new DatabaseSync(AUTH_DB_PATH);
+authDb.exec('PRAGMA journal_mode = WAL');
+authDb.exec('PRAGMA foreign_keys = ON');
+authDb.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+
+  CREATE TABLE IF NOT EXISTS auth_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+`);
+
+if (!AUTH_JWT_SECRET) {
+  const storedSecret = authDb.prepare('SELECT value FROM auth_settings WHERE key = ?').get('jwt_secret')?.value;
+  AUTH_JWT_SECRET = storedSecret || randomBytes(32).toString('base64url');
+  if (!storedSecret) {
+    authDb.prepare('INSERT INTO auth_settings (key, value) VALUES (?, ?)').run('jwt_secret', AUTH_JWT_SECRET);
+  }
+}
+
+const userCount = authDb.prepare('SELECT COUNT(*) AS count FROM users').get().count;
+if (userCount === 0 && AUTH_INITIAL_USERNAME && AUTH_INITIAL_PASSWORD) {
+  authDb.prepare(`
+    INSERT INTO users (id, username, password_hash, created_at)
+    VALUES (?, ?, ?, ?)
+  `).run(randomUUID(), AUTH_INITIAL_USERNAME, hashPassword(AUTH_INITIAL_PASSWORD), new Date().toISOString());
+  console.warn(`Created initial user "${AUTH_INITIAL_USERNAME}" from AUTH_INITIAL_USERNAME/AUTH_INITIAL_PASSWORD.`);
+} else if (userCount === 0) {
+  console.warn('No auth users exist. Create one with: npm run user:add -- <username> <password>');
+}
 
 const fastify = Fastify({
   logger: { level: 'info' },
@@ -74,6 +136,20 @@ await fastify.register(multipart, {
   limits: { fileSize: MAX_AUDIO_SAMPLE_BYTES },
 });
 
+fastify.addHook('preHandler', async (request, reply) => {
+  if (!requiresAuthentication(request)) {
+    return;
+  }
+
+  const authResult = authenticateRequest(request);
+  if (!authResult.ok) {
+    return reply.code(401).send({ error: authResult.error });
+  }
+
+  request.user = authResult.user;
+  request.session = authResult.session;
+});
+
 // Serve Angular build output if present
 const FRONTEND_DIST = path.join(__dirname, '..', 'frontend', 'dist', 'voice-cloning-frontend', 'browser');
 try {
@@ -82,6 +158,142 @@ try {
   fastify.log.info(`Serving frontend from ${FRONTEND_DIST}`);
 } catch {
   fastify.log.warn('Frontend build not found; API-only mode.');
+}
+
+function requiresAuthentication(request) {
+  const url = request.url.split('?')[0];
+  if (url === '/api/auth/login') {
+    return false;
+  }
+  return url.startsWith('/api/') || url === '/mcp';
+}
+
+function hashPassword(password) {
+  const salt = randomBytes(16).toString('base64url');
+  const hash = pbkdf2Sync(String(password), salt, 210_000, 32, 'sha256').toString('base64url');
+  return `pbkdf2_sha256$210000$${salt}$${hash}`;
+}
+
+function verifyPassword(password, storedHash) {
+  const [scheme, iterations, salt, expectedHash] = String(storedHash || '').split('$');
+  if (scheme !== 'pbkdf2_sha256' || !iterations || !salt || !expectedHash) {
+    return false;
+  }
+
+  const actual = pbkdf2Sync(String(password), salt, Number(iterations), 32, 'sha256');
+  const expected = Buffer.from(expectedHash, 'base64url');
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function base64UrlJson(value) {
+  return Buffer.from(JSON.stringify(value)).toString('base64url');
+}
+
+function signJwt(payload) {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const encodedHeader = base64UrlJson(header);
+  const encodedPayload = base64UrlJson(payload);
+  const signature = createHmac('sha256', AUTH_JWT_SECRET)
+    .update(`${encodedHeader}.${encodedPayload}`)
+    .digest('base64url');
+  return `${encodedHeader}.${encodedPayload}.${signature}`;
+}
+
+function verifyJwt(token) {
+  const parts = String(token || '').split('.');
+  if (parts.length !== 3) {
+    throw new Error('Invalid token.');
+  }
+
+  const [encodedHeader, encodedPayload, signature] = parts;
+  const expectedSignature = createHmac('sha256', AUTH_JWT_SECRET)
+    .update(`${encodedHeader}.${encodedPayload}`)
+    .digest('base64url');
+  const actual = Buffer.from(signature);
+  const expected = Buffer.from(expectedSignature);
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+    throw new Error('Invalid token signature.');
+  }
+
+  const header = JSON.parse(Buffer.from(encodedHeader, 'base64url').toString('utf8'));
+  if (header.alg !== 'HS256' || header.typ !== 'JWT') {
+    throw new Error('Unsupported token.');
+  }
+
+  const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+  if (!payload.exp || Date.now() >= payload.exp * 1000) {
+    throw new Error('Token expired.');
+  }
+  return payload;
+}
+
+function hashToken(token) {
+  return createHmac('sha256', AUTH_JWT_SECRET).update(token).digest('base64url');
+}
+
+function getBearerToken(request) {
+  const header = request.headers.authorization || '';
+  const match = String(header).match(/^Bearer\s+(.+)$/i);
+  return match?.[1] || null;
+}
+
+function authenticateRequest(request) {
+  const token = getBearerToken(request);
+  if (!token) {
+    return { ok: false, error: 'Authentication required.' };
+  }
+
+  let payload;
+  try {
+    payload = verifyJwt(token);
+  } catch {
+    return { ok: false, error: 'Invalid or expired token.' };
+  }
+
+  const tokenHash = hashToken(token);
+  const row = authDb.prepare(`
+    SELECT
+      sessions.id AS session_id,
+      sessions.expires_at,
+      sessions.revoked_at,
+      users.id AS user_id,
+      users.username
+    FROM sessions
+    JOIN users ON users.id = sessions.user_id
+    WHERE sessions.id = ? AND sessions.token_hash = ?
+  `).get(payload.sid, tokenHash);
+
+  if (!row || row.revoked_at || Date.parse(row.expires_at) <= Date.now()) {
+    return { ok: false, error: 'Session expired.' };
+  }
+
+  return {
+    ok: true,
+    user: { id: row.user_id, username: row.username },
+    session: { id: row.session_id, expiresAt: row.expires_at },
+  };
+}
+
+function createSession(user) {
+  const now = Math.floor(Date.now() / 1000);
+  const expiresAtSeconds = now + AUTH_SESSION_TTL_SECONDS;
+  const sessionId = randomUUID();
+  const token = signJwt({
+    sub: user.id,
+    username: user.username,
+    sid: sessionId,
+    iat: now,
+    exp: expiresAtSeconds,
+  });
+
+  const createdAt = new Date(now * 1000).toISOString();
+  const expiresAt = new Date(expiresAtSeconds * 1000).toISOString();
+  authDb.prepare(`
+    INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(sessionId, user.id, hashToken(token), createdAt, expiresAt);
+
+  return { token, expiresAt, user: { id: user.id, username: user.username } };
 }
 
 /**
@@ -395,6 +607,34 @@ function createVoiceCloningMcpServer() {
 }
 
 // ---------- Routes ----------
+
+fastify.post('/api/auth/login', async (request, reply) => {
+  const { username, password } = request.body || {};
+  if (!username || !password || typeof username !== 'string' || typeof password !== 'string') {
+    return reply.code(400).send({ error: 'username and password are required.' });
+  }
+
+  const user = authDb.prepare('SELECT id, username, password_hash FROM users WHERE username = ?').get(username);
+  if (!user || !verifyPassword(password, user.password_hash)) {
+    return reply.code(401).send({ error: 'Invalid username or password.' });
+  }
+
+  authDb.prepare('DELETE FROM sessions WHERE expires_at <= ? OR revoked_at IS NOT NULL').run(new Date().toISOString());
+  return createSession(user);
+});
+
+fastify.get('/api/auth/me', async (request) => ({
+  user: request.user,
+  session: request.session,
+}));
+
+fastify.post('/api/auth/logout', async (request) => {
+  authDb.prepare('UPDATE sessions SET revoked_at = ? WHERE id = ?').run(
+    new Date().toISOString(),
+    request.session.id,
+  );
+  return { ok: true };
+});
 
 fastify.get('/api/health', async () => ({
   status: 'ok',
