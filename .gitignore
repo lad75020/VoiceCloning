@@ -136,3 +136,4 @@ dist
 .pnp.*
 .claude
 .claude/worktrees/elegant-elion-c95cc3
+/.claude
