@@ -1,6 +1,6 @@
 # VoiceCloning
 
-VoiceCloning is an authenticated Angular + Fastify studio for recording a reference voice, generating cloned speech over HTTP or MCP, and returning browser WebM/Opus or MCP MP3 output without changing the existing queue, cancellation, and upload workflow.
+VoiceCloning is an authenticated Angular + Fastify studio for recording a reference voice, generating cloned speech over HTTP or MCP, and returning browser WebM/Opus or MCP MP3 output without changing the existing queue, cancellation, and upload workflow. OpenVoice additionally offers an English style modal with weighted Happy, Sad, Terrified, Cheerful, and Friendly controls.
 
 ## Engines
 
@@ -95,6 +95,7 @@ F5_TTS_MODEL=F5TTS_v1_Base
 OPENVOICE_CONDA_ENV=openvoice
 OPENVOICE_REPO_PATH=/absolute/path/to/OpenVoice
 OPENVOICE_CHECKPOINTS_PATH=/absolute/path/to/OpenVoice/checkpoints_v2
+OPENVOICE_V1_CHECKPOINTS_PATH=/absolute/path/to/OpenVoice/checkpoints
 OPENVOICE_DEVICE=auto
 OPENVOICE_CONVERTER_CONFIG_PATH=
 OPENVOICE_CONVERTER_CHECKPOINT_PATH=
@@ -107,6 +108,11 @@ OPENVOICE_SOURCE_SE_FR_PATH=
 OPENVOICE_MELO_LANGUAGE_ES=ES
 OPENVOICE_MELO_SPEAKER_ES=ES
 OPENVOICE_SOURCE_SE_ES_PATH=
+OPENVOICE_V1_BASE_CONFIG_PATH=
+OPENVOICE_V1_BASE_CHECKPOINT_PATH=
+OPENVOICE_V1_STYLE_SE_PATH=
+OPENVOICE_V1_CONVERTER_CONFIG_PATH=
+OPENVOICE_V1_CONVERTER_CHECKPOINT_PATH=
 ```
 
 Notes:
@@ -119,6 +125,15 @@ Notes:
   - `${OPENVOICE_CHECKPOINTS_PATH}/converter/checkpoint.pth`
 - If `OPENVOICE_SOURCE_SE_<LANG>_PATH` is unset, the backend derives:
   - `${OPENVOICE_CHECKPOINTS_PATH}/base_speakers/ses/<lowercase-normalized-speaker>.pth`
+- `OPENVOICE_V1_CHECKPOINTS_PATH` is needed only for a nonzero English style. If unset, it defaults to `${OPENVOICE_REPO_PATH}/checkpoints`, or to a sibling `checkpoints` directory beside `OPENVOICE_CHECKPOINTS_PATH`.
+- The V1 style defaults under that root are:
+  - `base_speakers/EN/config.json`
+  - `base_speakers/EN/checkpoint.pth`
+  - `base_speakers/EN/en_style_se.pth`
+  - `converter/config.json`
+  - `converter/checkpoint.pth`
+- The five API style keys are `happy`, `sad`, `terrified`, `cheerful`, and `friendly`; every supplied amount must be a finite number from `0` to `1`. `happy` maps to OpenVoice V1’s upstream `excited` speaker. The blend retains each continuous amount, adds neutral `max(0, 1 - max(style amounts))`, then normalizes all weights.
+- Omitted or all-zero styles retain the existing V2 neutral path for English, French, and Spanish. Any nonzero style is rejected unless `engine` is `openvoice` and the output language is English.
 
 ## Per-engine setup
 
@@ -190,7 +205,7 @@ conda run -n f5-tts pip install -e /absolute/path/to/F5-TTS
 - The backend passes `--ref_text ''` so the CLI can use its built-in ASR path.
 - The backend specifies `--output_dir` and `--output_file` and then verifies the expected WAV path exactly.
 
-### OpenVoice V2
+### OpenVoice V2 and English V1 style assets
 
 ```bash
 git clone https://github.com/myshell-ai/OpenVoice.git /absolute/path/to/OpenVoice
@@ -214,6 +229,19 @@ The conda-forge PyAV/FFmpeg pins avoid building legacy `av==10` against an incom
   - `converter/config.json`
   - `converter/checkpoint.pth`
   - `base_speakers/ses/<speaker>.pth`
+
+For the style controls, download the OpenVoice **V1** checkpoint archive linked from the upstream [OpenVoice V1 usage instructions](https://github.com/myshell-ai/OpenVoice/blob/main/docs/USAGE.md) and extract it into `/absolute/path/to/OpenVoice/checkpoints` (or set `OPENVOICE_V1_CHECKPOINTS_PATH` to its extracted root). Verify this layout before starting the backend:
+
+```text
+checkpoints/
+  base_speakers/EN/config.json
+  base_speakers/EN/checkpoint.pth
+  base_speakers/EN/en_style_se.pth
+  converter/config.json
+  converter/checkpoint.pth
+```
+
+When a style amount is nonzero, the adapter uses OpenVoice V1 `BaseSpeakerTTS` with a weighted speaker-embedding interpolation and then V1 tone-color conversion. It does not mix rendered audio. The V1 expressive English checkpoint is intentionally not used for French or Spanish.
 
 ## Run locally
 
@@ -246,6 +274,7 @@ Backend tests do not load models. They cover:
 - unsupported engine rejection
 - language normalization
 - argv and adapter argument construction for all six engines
+- OpenVoice style validation, V1 argv construction, and zero-style V2 fallback
 
 Commands:
 

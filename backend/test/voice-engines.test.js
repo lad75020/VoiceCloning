@@ -2,12 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  OPENVOICE_STYLE_KEYS,
+  OPENVOICE_V1_STYLE_SPEAKER_IDS,
   VOICE_CLONING_ENGINE_IDS,
   buildVoiceEngineCommand,
   createVoiceEngineRuntimeConfig,
+  hasActiveOpenVoiceStyles,
   listVoiceCloningEngines,
   normalizeGenerationEngine,
   normalizeLanguageCode,
+  normalizeOpenVoiceStyles,
+  validateOpenVoiceStyleRequest,
 } from '../lib/voice-engines.js';
 
 function createRuntimeConfig() {
@@ -35,6 +40,7 @@ function createRuntimeConfig() {
       OPENVOICE_CONDA_ENV: 'openvoice-env',
       OPENVOICE_REPO_PATH: '/repos/openvoice',
       OPENVOICE_CHECKPOINTS_PATH: '/models/openvoice',
+      OPENVOICE_V1_CHECKPOINTS_PATH: '/models/openvoice-v1',
       OPENVOICE_DEVICE: 'auto',
       OPENVOICE_MELO_LANGUAGE_EN: 'EN_NEWEST',
       OPENVOICE_MELO_SPEAKER_EN: 'EN-Newest',
@@ -298,4 +304,121 @@ test('openvoice defaults an omitted language to English and rejects unsupported 
     }),
     /only supports mapped languages en, fr, es/,
   );
+});
+
+test('OpenVoice style controls have canonical names and V1 speaker mappings', () => {
+  assert.deepEqual(OPENVOICE_STYLE_KEYS, ['happy', 'sad', 'terrified', 'cheerful', 'friendly']);
+  assert.deepEqual(OPENVOICE_V1_STYLE_SPEAKER_IDS, {
+    happy: 4,
+    sad: 8,
+    terrified: 6,
+    cheerful: 5,
+    friendly: 9,
+  });
+});
+
+test('OpenVoice style validation expands omitted keys and rejects unsafe values', () => {
+  assert.deepEqual(normalizeOpenVoiceStyles({ happy: 0.4, friendly: 1 }), {
+    happy: 0.4,
+    sad: 0,
+    terrified: 0,
+    cheerful: 0,
+    friendly: 1,
+  });
+  assert.equal(hasActiveOpenVoiceStyles(normalizeOpenVoiceStyles({ happy: 0 })), false);
+  assert.throws(() => normalizeOpenVoiceStyles({ excited: 1 }), /unsupported key/);
+  assert.throws(() => normalizeOpenVoiceStyles({ happy: Infinity }), /finite number/);
+  assert.throws(() => normalizeOpenVoiceStyles(Object.create({ happy: 1 })), /plain object/);
+});
+
+test('style request rules reject non-OpenVoice and non-English blends while allowing neutral V2', () => {
+  assert.throws(
+    () => validateOpenVoiceStyleRequest({ styles: { happy: 0 }, engine: 'omnivoice', language: 'en' }),
+    /only when engine is openvoice/,
+  );
+  assert.throws(
+    () => validateOpenVoiceStyleRequest({ styles: { happy: 0.2 }, engine: 'openvoice', language: 'fr' }),
+    /only for English output/,
+  );
+  assert.deepEqual(
+    validateOpenVoiceStyleRequest({ styles: { happy: 0 }, engine: 'openvoice', language: 'fr' }),
+    { happy: 0, sad: 0, terrified: 0, cheerful: 0, friendly: 0 },
+  );
+});
+
+test('OpenVoice style command uses V1 assets and preserves continuous amounts', () => {
+  const runtimeConfig = createRuntimeConfig();
+  const command = buildVoiceEngineCommand({
+    engine: 'openvoice',
+    text: 'This is a cheerful greeting.',
+    language: 'en',
+    refWav: '/tmp/ref.wav',
+    outWav: '/tmp/styled-openvoice.wav',
+    jobId: 'style-job',
+    styles: { happy: 0.375, cheerful: 0.8 },
+    runtimeConfig,
+  });
+
+  assert.deepEqual(command.args, [
+    'run',
+    '-n', 'openvoice-env',
+    '--no-capture-output',
+    'python',
+    '/workspace/backend/inference/openvoice_adapter.py',
+    '--text', 'This is a cheerful greeting.',
+    '--language', 'en',
+    '--ref-audio', '/tmp/ref.wav',
+    '--output', '/tmp/styled-openvoice.wav',
+    '--device', 'auto',
+    '--styles', '{"happy":0.375,"sad":0,"terrified":0,"cheerful":0.8,"friendly":0}',
+    '--v1-base-config', '/models/openvoice-v1/base_speakers/EN/config.json',
+    '--v1-base-checkpoint', '/models/openvoice-v1/base_speakers/EN/checkpoint.pth',
+    '--v1-style-se-path', '/models/openvoice-v1/base_speakers/EN/en_style_se.pth',
+    '--v1-converter-config', '/models/openvoice-v1/converter/config.json',
+    '--v1-converter-checkpoint', '/models/openvoice-v1/converter/checkpoint.pth',
+    '--repo-path', '/repos/openvoice',
+  ]);
+  assert.equal(command.args.includes('--melo-language'), false);
+});
+
+test('omitted or all-zero OpenVoice styles keep the existing V2 command path', () => {
+  const runtimeConfig = createRuntimeConfig();
+  const baseRequest = {
+    engine: 'openvoice',
+    text: 'Neutral output',
+    language: 'en',
+    refWav: '/tmp/ref.wav',
+    outWav: '/tmp/openvoice.wav',
+    jobId: 'neutral-job',
+    runtimeConfig,
+  };
+  const omitted = buildVoiceEngineCommand(baseRequest);
+  const zero = buildVoiceEngineCommand({ ...baseRequest, styles: { happy: 0, sad: 0, terrified: 0, cheerful: 0, friendly: 0 } });
+  assert.deepEqual(zero.args, omitted.args);
+  assert.equal(omitted.args.includes('--styles'), false);
+  assert.equal(omitted.args.includes('--melo-language'), true);
+});
+
+test('styled OpenVoice requires only V1 assets, not the neutral V2 checkpoint root', () => {
+  const runtimeConfig = createVoiceEngineRuntimeConfig({
+    env: {
+      CONDA_BASE: '/opt/miniconda3',
+      OPENVOICE_CONDA_ENV: 'openvoice-env',
+      OPENVOICE_V1_CHECKPOINTS_PATH: '/models/openvoice-v1',
+    },
+    backendDir: '/workspace/backend',
+    outputsDir: '/workspace/backend/outputs',
+    uploadsDir: '/workspace/backend/uploads',
+  });
+  const command = buildVoiceEngineCommand({
+    engine: 'openvoice',
+    text: 'Styled',
+    language: 'en',
+    refWav: '/tmp/ref.wav',
+    outWav: '/tmp/openvoice.wav',
+    jobId: 'v1-only-job',
+    styles: { friendly: 0.5 },
+    runtimeConfig,
+  });
+  assert.equal(command.args.includes('--v1-base-config'), true);
 });

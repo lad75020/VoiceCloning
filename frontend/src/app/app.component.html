@@ -1,6 +1,6 @@
 <div class="vc-shell">
   <!-- Top nav -->
-  <header class="vc-nav">
+  <header class="vc-nav" [attr.inert]="styleModalOpen() ? '' : null">
     <div class="vc-nav-inner">
       <div class="vc-brand">
         <span class="vc-logo" aria-hidden="true">
@@ -39,7 +39,7 @@
     </div>
   </header>
 
-  <main class="vc-main">
+  <main class="vc-main" [attr.inert]="styleModalOpen() ? '' : null">
     @if (!auth.isAuthenticated()) {
       <section class="vc-card vc-login-card">
         <div class="vc-card-head">
@@ -268,7 +268,7 @@
                 <button type="button"
                         class="vc-engine"
                         [class.vc-engine-on]="engine() === option.id"
-                        (click)="engine.set(option.id)"
+                        (click)="option.id === 'openvoice' ? openOpenVoiceStyleModal($event.currentTarget) : engine.set(option.id)"
                         [disabled]="generating()">
                   <span class="vc-engine-mark"></span>
                   <span class="vc-engine-name">{{ option.label }}</span>
@@ -276,6 +276,19 @@
                 </button>
               }
             </div>
+            @if (engine() === 'openvoice') {
+              <div class="vc-style-summary" aria-live="polite">
+                <span><strong>Style:</strong> {{ openVoiceStyleSummary() }}</span>
+                <button type="button" class="vc-btn vc-btn-ghost vc-btn-small" (click)="openOpenVoiceStyleModal($event.currentTarget)" [disabled]="generating()">
+                  Edit styles
+                </button>
+              </div>
+              @if (hasActiveOpenVoiceStyles() && textLanguage() !== 'en') {
+                <div class="vc-hint vc-style-language-warning" role="status">
+                  Styled OpenVoice synthesis is available only in English.
+                </div>
+              }
+            }
           </div>
 
           <div class="vc-field">
@@ -391,6 +404,54 @@
       <span class="vc-foot-dot">•</span>
       <span class="mono">https://mac-studio.tail4d2ab4.ts.net:17992</span>
     </footer>
+
     }
   </main>
+
+  @if (styleModalOpen()) {
+    <div class="vc-style-modal-backdrop" (click)="closeStyleModalOnBackdrop($event)">
+      <section #styleDialog
+               class="vc-style-modal"
+               role="dialog"
+               aria-modal="true"
+               aria-labelledby="openVoiceStyleTitle"
+               tabindex="-1"
+               (keydown)="onStyleModalKeydown($event)">
+        <div class="vc-style-modal-head">
+          <div>
+            <span class="vc-eyebrow">OPENVOICE ENGLISH</span>
+            <h2 id="openVoiceStyleTitle">Voice style</h2>
+            <p>Blend expressive OpenVoice V1 speaker embeddings. Zero keeps the neutral V2 path.</p>
+          </div>
+          <button type="button" class="vc-icon-btn" (click)="closeOpenVoiceStyleModal()" aria-label="Close voice style dialog">×</button>
+        </div>
+
+        <div class="vc-style-controls">
+          @for (control of openVoiceStyleControls; track control.key) {
+            <div class="vc-style-control">
+              <label [for]="'style-' + control.key">{{ control.label }}</label>
+              <div class="vc-style-range-row">
+                <input [id]="'style-' + control.key"
+                       type="range"
+                       min="0"
+                       max="100"
+                       step="1"
+                       [ngModel]="openVoiceStylePercent(control.key)"
+                       (ngModelChange)="setDraftOpenVoiceStyle(control.key, $event)"
+                       [attr.aria-describedby]="'style-value-' + control.key">
+                <output [id]="'style-value-' + control.key" class="mono">{{ openVoiceStylePercent(control.key) }}%</output>
+              </div>
+            </div>
+          }
+        </div>
+
+        <div class="vc-style-modal-actions">
+          <button type="button" class="vc-btn vc-btn-ghost" (click)="resetOpenVoiceStyles()">Reset</button>
+          <span class="vc-style-actions-spacer"></span>
+          <button type="button" class="vc-btn vc-btn-ghost" (click)="closeOpenVoiceStyleModal()">Cancel</button>
+          <button type="button" class="vc-btn vc-btn-primary" (click)="applyOpenVoiceStyles()">Apply</button>
+        </div>
+      </section>
+    </div>
+  }
 </div>

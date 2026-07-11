@@ -9,6 +9,26 @@ export const VOICE_CLONING_ENGINE_IDS = [
   'openvoice',
 ];
 
+/**
+ * Public style controls accepted by the HTTP and MCP APIs. These names are
+ * deliberately independent of the OpenVoice V1 checkpoint speaker names.
+ */
+export const OPENVOICE_STYLE_KEYS = Object.freeze([
+  'happy',
+  'sad',
+  'terrified',
+  'cheerful',
+  'friendly',
+]);
+
+export const OPENVOICE_V1_STYLE_SPEAKER_IDS = Object.freeze({
+  happy: 4, // OpenVoice V1 calls this speaker "excited".
+  sad: 8,
+  terrified: 6,
+  cheerful: 5,
+  friendly: 9,
+});
+
 export const VOICE_CLONING_ENGINES = Object.freeze({
   omnivoice: {
     id: 'omnivoice',
@@ -136,6 +156,20 @@ function deriveOpenVoiceSourceSePath(checkpointsPath, speakerKey) {
   return deriveOpenVoicePath(checkpointsPath, 'base_speakers', 'ses', `${normalizedSpeakerKey}.pth`);
 }
 
+function deriveOpenVoiceV1CheckpointsPath(repoPath, v2CheckpointsPath) {
+  if (repoPath) {
+    return path.join(repoPath, 'checkpoints');
+  }
+  if (v2CheckpointsPath) {
+    return path.join(path.dirname(v2CheckpointsPath), 'checkpoints');
+  }
+  return null;
+}
+
+function deriveOpenVoiceV1Path(checkpointsPath, ...segments) {
+  return checkpointsPath ? path.join(checkpointsPath, ...segments) : null;
+}
+
 function getOpenVoiceLanguageConfig(engineConfig, language) {
   const mapping = engineConfig.languageMappings[language];
   if (!mapping) {
@@ -177,6 +211,70 @@ export function normalizeLanguageCode(language) {
   return null;
 }
 
+function isPlainObject(value) {
+  return value !== null
+    && typeof value === 'object'
+    && Object.getPrototypeOf(value) === Object.prototype;
+}
+
+/**
+ * Validate and expand an optional OpenVoice style object to its canonical
+ * five-key representation. A supplied value must be a normal JSON object:
+ * accepting inherited keys or custom prototypes here would make validation
+ * differ from the values eventually passed to the subprocess.
+ */
+export function normalizeOpenVoiceStyles(styles) {
+  if (styles === undefined) {
+    return null;
+  }
+  if (!isPlainObject(styles)) {
+    throw new Error('styles must be a plain object with only happy, sad, terrified, cheerful, and friendly keys.');
+  }
+
+  for (const key of Object.keys(styles)) {
+    if (!OPENVOICE_STYLE_KEYS.includes(key)) {
+      throw new Error(`styles contains unsupported key: ${key}.`);
+    }
+  }
+
+  const normalized = {};
+  for (const key of OPENVOICE_STYLE_KEYS) {
+    const amount = styles[key] === undefined ? 0 : styles[key];
+    if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0 || amount > 1) {
+      throw new Error(`styles.${key} must be a finite number from 0 to 1.`);
+    }
+    normalized[key] = amount;
+  }
+  return Object.freeze(normalized);
+}
+
+export function hasActiveOpenVoiceStyles(styles) {
+  return !!styles && OPENVOICE_STYLE_KEYS.some((key) => styles[key] > 0);
+}
+
+/**
+ * Apply request-level style rules shared by HTTP, MCP, and command building.
+ * Explicit all-zero styles are permitted for OpenVoice and retain V2 neutral
+ * synthesis. Only a nonzero blend selects the English-only V1 path.
+ */
+export function validateOpenVoiceStyleRequest({ styles, engine, language }) {
+  const normalizedStyles = normalizeOpenVoiceStyles(styles);
+  if (normalizedStyles === null) {
+    return null;
+  }
+
+  const selectedEngine = normalizeGenerationEngine(engine);
+  if (selectedEngine !== 'openvoice') {
+    throw new Error('styles are supported only when engine is openvoice.');
+  }
+
+  if (hasActiveOpenVoiceStyles(normalizedStyles) && language !== 'en') {
+    throw new Error('Nonzero OpenVoice styles are supported only for English output. Use English or reset all styles to zero.');
+  }
+
+  return normalizedStyles;
+}
+
 export function createVoiceEngineRuntimeConfig({
   env = process.env,
   backendDir,
@@ -188,6 +286,9 @@ export function createVoiceEngineRuntimeConfig({
   const condaBin = path.join(condaBase, 'bin', 'conda');
   const defaultCondaEnv = cleanOptionalString(env.CONDA_ENV) || 'omnivoice';
   const checkpointsPath = cleanOptionalString(env.OPENVOICE_CHECKPOINTS_PATH);
+  const openVoiceRepoPath = cleanOptionalString(env.OPENVOICE_REPO_PATH);
+  const v1CheckpointsPath = cleanOptionalString(env.OPENVOICE_V1_CHECKPOINTS_PATH)
+    || deriveOpenVoiceV1CheckpointsPath(openVoiceRepoPath, checkpointsPath);
 
   return {
     backendDir,
@@ -229,13 +330,24 @@ export function createVoiceEngineRuntimeConfig({
       },
       openvoice: {
         condaEnv: cleanOptionalString(env.OPENVOICE_CONDA_ENV) || 'openvoice',
-        repoPath: cleanOptionalString(env.OPENVOICE_REPO_PATH),
+        repoPath: openVoiceRepoPath,
         checkpointsPath,
+        v1CheckpointsPath,
         device: cleanOptionalString(env.OPENVOICE_DEVICE) || 'auto',
         converterConfigPath: cleanOptionalString(env.OPENVOICE_CONVERTER_CONFIG_PATH)
           || deriveOpenVoicePath(checkpointsPath, 'converter', 'config.json'),
         converterCheckpointPath: cleanOptionalString(env.OPENVOICE_CONVERTER_CHECKPOINT_PATH)
           || deriveOpenVoicePath(checkpointsPath, 'converter', 'checkpoint.pth'),
+        v1BaseConfigPath: cleanOptionalString(env.OPENVOICE_V1_BASE_CONFIG_PATH)
+          || deriveOpenVoiceV1Path(v1CheckpointsPath, 'base_speakers', 'EN', 'config.json'),
+        v1BaseCheckpointPath: cleanOptionalString(env.OPENVOICE_V1_BASE_CHECKPOINT_PATH)
+          || deriveOpenVoiceV1Path(v1CheckpointsPath, 'base_speakers', 'EN', 'checkpoint.pth'),
+        v1StyleSePath: cleanOptionalString(env.OPENVOICE_V1_STYLE_SE_PATH)
+          || deriveOpenVoiceV1Path(v1CheckpointsPath, 'base_speakers', 'EN', 'en_style_se.pth'),
+        v1ConverterConfigPath: cleanOptionalString(env.OPENVOICE_V1_CONVERTER_CONFIG_PATH)
+          || deriveOpenVoiceV1Path(v1CheckpointsPath, 'converter', 'config.json'),
+        v1ConverterCheckpointPath: cleanOptionalString(env.OPENVOICE_V1_CONVERTER_CHECKPOINT_PATH)
+          || deriveOpenVoiceV1Path(v1CheckpointsPath, 'converter', 'checkpoint.pth'),
         languageMappings: {
           en: {
             meloLanguage: cleanOptionalString(env.OPENVOICE_MELO_LANGUAGE_EN) || 'EN_NEWEST',
@@ -261,7 +373,7 @@ export function createVoiceEngineRuntimeConfig({
   };
 }
 
-export function getEngineConfigurationIssues(engine, runtimeConfig, language = null) {
+export function getEngineConfigurationIssues(engine, runtimeConfig, language = null, styles = null) {
   const selectedEngine = normalizeGenerationEngine(engine);
   const issues = [];
   const engineConfig = runtimeConfig.engines[selectedEngine];
@@ -275,28 +387,46 @@ export function getEngineConfigurationIssues(engine, runtimeConfig, language = n
   }
 
   if (selectedEngine === 'openvoice') {
-    if (!cleanOptionalString(engineConfig.checkpointsPath)) {
-      issues.push('Set OPENVOICE_CHECKPOINTS_PATH to the OpenVoice V2 checkpoints directory.');
-    }
-    if (!cleanOptionalString(engineConfig.converterConfigPath)) {
-      issues.push('Set OPENVOICE_CONVERTER_CONFIG_PATH or OPENVOICE_CHECKPOINTS_PATH.');
-    }
-    if (!cleanOptionalString(engineConfig.converterCheckpointPath)) {
-      issues.push('Set OPENVOICE_CONVERTER_CHECKPOINT_PATH or OPENVOICE_CHECKPOINTS_PATH.');
-    }
+    if (hasActiveOpenVoiceStyles(styles)) {
+      if (!cleanOptionalString(engineConfig.v1BaseConfigPath)) {
+        issues.push('Set OPENVOICE_V1_BASE_CONFIG_PATH or OPENVOICE_V1_CHECKPOINTS_PATH.');
+      }
+      if (!cleanOptionalString(engineConfig.v1BaseCheckpointPath)) {
+        issues.push('Set OPENVOICE_V1_BASE_CHECKPOINT_PATH or OPENVOICE_V1_CHECKPOINTS_PATH.');
+      }
+      if (!cleanOptionalString(engineConfig.v1StyleSePath)) {
+        issues.push('Set OPENVOICE_V1_STYLE_SE_PATH or OPENVOICE_V1_CHECKPOINTS_PATH to en_style_se.pth.');
+      }
+      if (!cleanOptionalString(engineConfig.v1ConverterConfigPath)) {
+        issues.push('Set OPENVOICE_V1_CONVERTER_CONFIG_PATH or OPENVOICE_V1_CHECKPOINTS_PATH.');
+      }
+      if (!cleanOptionalString(engineConfig.v1ConverterCheckpointPath)) {
+        issues.push('Set OPENVOICE_V1_CONVERTER_CHECKPOINT_PATH or OPENVOICE_V1_CHECKPOINTS_PATH.');
+      }
+    } else {
+      if (!cleanOptionalString(engineConfig.checkpointsPath)) {
+        issues.push('Set OPENVOICE_CHECKPOINTS_PATH to the OpenVoice V2 checkpoints directory.');
+      }
+      if (!cleanOptionalString(engineConfig.converterConfigPath)) {
+        issues.push('Set OPENVOICE_CONVERTER_CONFIG_PATH or OPENVOICE_CHECKPOINTS_PATH.');
+      }
+      if (!cleanOptionalString(engineConfig.converterCheckpointPath)) {
+        issues.push('Set OPENVOICE_CONVERTER_CHECKPOINT_PATH or OPENVOICE_CHECKPOINTS_PATH.');
+      }
 
-    const normalizedLanguage = normalizeLanguageCode(language);
-    const languagesToCheck = normalizedLanguage ? [normalizedLanguage] : Array.from(SUPPORTED_LANGUAGE_CODES);
-    for (const code of languagesToCheck) {
-      const mapping = engineConfig.languageMappings[code];
-      if (!cleanOptionalString(mapping?.meloLanguage)) {
-        issues.push(`Set OPENVOICE_MELO_LANGUAGE_${code.toUpperCase()}.`);
-      }
-      if (!cleanOptionalString(mapping?.speakerId)) {
-        issues.push(`Set OPENVOICE_MELO_SPEAKER_${code.toUpperCase()}.`);
-      }
-      if (!cleanOptionalString(mapping?.sourceSePath)) {
-        issues.push(`Set OPENVOICE_SOURCE_SE_${code.toUpperCase()}_PATH or adjust the speaker mapping.`);
+      const normalizedLanguage = normalizeLanguageCode(language);
+      const languagesToCheck = normalizedLanguage ? [normalizedLanguage] : Array.from(SUPPORTED_LANGUAGE_CODES);
+      for (const code of languagesToCheck) {
+        const mapping = engineConfig.languageMappings[code];
+        if (!cleanOptionalString(mapping?.meloLanguage)) {
+          issues.push(`Set OPENVOICE_MELO_LANGUAGE_${code.toUpperCase()}.`);
+        }
+        if (!cleanOptionalString(mapping?.speakerId)) {
+          issues.push(`Set OPENVOICE_MELO_SPEAKER_${code.toUpperCase()}.`);
+        }
+        if (!cleanOptionalString(mapping?.sourceSePath)) {
+          issues.push(`Set OPENVOICE_SOURCE_SE_${code.toUpperCase()}_PATH or adjust the speaker mapping.`);
+        }
       }
     }
   }
@@ -318,13 +448,24 @@ export function buildVoiceEngineCommand({
   refWav,
   outWav,
   jobId,
+  styles,
   runtimeConfig,
 }) {
   const selectedEngine = normalizeGenerationEngine(engine);
   const engineConfig = runtimeConfig.engines[selectedEngine];
   const normalizedLanguage = normalizeLanguageCode(language)
     || (language == null || String(language).trim() === '' ? 'en' : null);
-  const configurationIssues = getEngineConfigurationIssues(selectedEngine, runtimeConfig, normalizedLanguage);
+  const normalizedStyles = validateOpenVoiceStyleRequest({
+    styles,
+    engine: selectedEngine,
+    language: normalizedLanguage,
+  });
+  const configurationIssues = getEngineConfigurationIssues(
+    selectedEngine,
+    runtimeConfig,
+    normalizedLanguage,
+    normalizedStyles,
+  );
 
   if (configurationIssues.length > 0) {
     throw new Error(`${VOICE_CLONING_ENGINES[selectedEngine].label} is not configured. ${configurationIssues.join(' ')}`);
@@ -448,6 +589,36 @@ export function buildVoiceEngineCommand({
       ],
       env: withPythonPath(runtimeConfig.baseEnv, engineConfig.repoPath),
       failureHint: 'Verify F5_TTS_CONDA_ENV, F5_TTS_MODEL, and the f5-tts_infer-cli command in that environment.',
+    };
+  }
+
+  const styledOpenVoice = hasActiveOpenVoiceStyles(normalizedStyles);
+  if (styledOpenVoice) {
+    const args = [
+      'run',
+      '-n', engineConfig.condaEnv,
+      '--no-capture-output',
+      'python',
+      path.join(runtimeConfig.inferenceDir, 'openvoice_adapter.py'),
+      '--text', text,
+      '--language', normalizedLanguage,
+      '--ref-audio', refWav,
+      '--output', outWav,
+      '--device', engineConfig.device,
+      '--styles', JSON.stringify(normalizedStyles),
+      '--v1-base-config', engineConfig.v1BaseConfigPath,
+      '--v1-base-checkpoint', engineConfig.v1BaseCheckpointPath,
+      '--v1-style-se-path', engineConfig.v1StyleSePath,
+      '--v1-converter-config', engineConfig.v1ConverterConfigPath,
+      '--v1-converter-checkpoint', engineConfig.v1ConverterCheckpointPath,
+    ];
+    appendOptionalArg(args, '--repo-path', engineConfig.repoPath);
+    return {
+      ...base,
+      cmd: runtimeConfig.condaBin,
+      args,
+      env: withPythonPath(runtimeConfig.baseEnv, engineConfig.repoPath),
+      failureHint: 'Verify OPENVOICE_V1_CHECKPOINTS_PATH contains the V1 English base speaker, en_style_se, and converter assets.',
     };
   }
 

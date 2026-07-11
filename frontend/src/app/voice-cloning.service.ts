@@ -14,6 +14,15 @@ export interface GenerateRequest {
   text: string;
   language: string;
   engine: string;
+  styles?: OpenVoiceStyleAmounts;
+}
+
+export interface OpenVoiceStyleAmounts {
+  happy: number;
+  sad: number;
+  terrified: number;
+  cheerful: number;
+  friendly: number;
 }
 
 @Injectable({ providedIn: 'root' })

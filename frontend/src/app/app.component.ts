@@ -1,8 +1,8 @@
-import { Component, OnDestroy, signal, computed } from '@angular/core';
+import { Component, ElementRef, OnDestroy, ViewChild, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { AudioRecorderService } from './audio-recorder.service';
-import { VoiceCloningService } from './voice-cloning.service';
+import { OpenVoiceStyleAmounts, VoiceCloningService } from './voice-cloning.service';
 import { AuthService } from './auth.service';
 
 interface LanguageOption {
@@ -26,6 +26,20 @@ interface StoredVoiceSample {
   voiceId?: string;
 }
 
+type OpenVoiceStyleKey = keyof OpenVoiceStyleAmounts;
+
+const OPENVOICE_STYLE_CONTROLS: ReadonlyArray<{ key: OpenVoiceStyleKey; label: string }> = [
+  { key: 'happy', label: 'Happy' },
+  { key: 'sad', label: 'Sad' },
+  { key: 'terrified', label: 'Terrified' },
+  { key: 'cheerful', label: 'Cheerful' },
+  { key: 'friendly', label: 'Friendly' },
+];
+
+function emptyOpenVoiceStyles(): OpenVoiceStyleAmounts {
+  return { happy: 0, sad: 0, terrified: 0, cheerful: 0, friendly: 0 };
+}
+
 @Component({
   selector: 'app-root',
   standalone: true,
@@ -39,6 +53,9 @@ export class AppComponent implements OnDestroy {
   private themeMediaQuery: MediaQueryList | null = null;
   private themeChangeListener: ((event: MediaQueryListEvent) => void) | null = null;
   private themeOverride: 'light' | 'dark' | null = null;
+  private styleModalReturnFocus: HTMLElement | null = null;
+
+  @ViewChild('styleDialog') styleDialog?: ElementRef<HTMLDivElement>;
 
   readonly engines: EngineOption[] = [
     { id: 'omnivoice', label: 'OmniVoice', subtitle: 'k2-fsa · multilingual' },
@@ -55,9 +72,14 @@ export class AppComponent implements OnDestroy {
     { code: 'es', label: 'Español' },
   ];
 
+  readonly openVoiceStyleControls = OPENVOICE_STYLE_CONTROLS;
+
   recordLanguage = signal<string>('en');
   textLanguage = signal<string>('en');
   engine = signal<string>('omnivoice');
+  openVoiceStyles = signal<OpenVoiceStyleAmounts>(emptyOpenVoiceStyles());
+  draftOpenVoiceStyles = signal<OpenVoiceStyleAmounts>(emptyOpenVoiceStyles());
+  styleModalOpen = signal<boolean>(false);
   text = signal<string>('');
   loginUsername = signal<string>('');
   loginPassword = signal<string>('');
@@ -88,6 +110,18 @@ export class AppComponent implements OnDestroy {
   canGenerate = computed(
     () => !!this.voiceId() && this.text().trim().length > 0 && !this.generating(),
   );
+
+  hasActiveOpenVoiceStyles = computed(() => (
+    Object.values(this.openVoiceStyles()).some((amount) => amount > 0)
+  ));
+
+  openVoiceStyleSummary = computed(() => {
+    const active = OPENVOICE_STYLE_CONTROLS
+      .map(({ key, label }) => ({ label, amount: this.openVoiceStyles()[key] }))
+      .filter(({ amount }) => amount > 0)
+      .map(({ label, amount }) => `${label} ${Math.round(amount * 100)}%`);
+    return active.length ? active.join(' · ') : 'Neutral V2 voice';
+  });
 
   constructor(
     private recorder: AudioRecorderService,
@@ -254,6 +288,11 @@ export class AppComponent implements OnDestroy {
     const textVal = this.text().trim();
     if (!id || !textVal) return;
 
+    if (this.engine() === 'openvoice' && this.hasActiveOpenVoiceStyles() && this.textLanguage() !== 'en') {
+      this.error.set('OpenVoice styles are supported only for English output. Select English or reset the styles to zero.');
+      return;
+    }
+
     this.error.set(null);
     this.generating.set(true);
     const jobId = this.createId();
@@ -269,6 +308,7 @@ export class AppComponent implements OnDestroy {
         text: textVal,
         language: this.textLanguage(),
         engine: this.engine(),
+        styles: this.engine() === 'openvoice' ? { ...this.openVoiceStyles() } : undefined,
       }).toPromise();
       if (!res?.body) throw new Error('Empty response from server.');
       const url = URL.createObjectURL(res.body);
@@ -321,6 +361,81 @@ export class AppComponent implements OnDestroy {
     this.selectedStoredVoiceId.set(null);
     this.voiceName.set('');
     this.generationSeconds.set(null);
+  }
+
+  openOpenVoiceStyleModal(trigger: EventTarget | null = null): void {
+    this.styleModalReturnFocus = trigger instanceof HTMLElement
+      ? trigger
+      : (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    this.draftOpenVoiceStyles.set({ ...this.openVoiceStyles() });
+    this.styleModalOpen.set(true);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => this.styleDialog?.nativeElement.focus());
+    });
+  }
+
+  closeOpenVoiceStyleModal(): void {
+    this.styleModalOpen.set(false);
+    const returnFocus = this.styleModalReturnFocus;
+    this.styleModalReturnFocus = null;
+    setTimeout(() => returnFocus?.focus());
+  }
+
+  applyOpenVoiceStyles(): void {
+    this.openVoiceStyles.set({ ...this.draftOpenVoiceStyles() });
+    this.engine.set('openvoice');
+    this.closeOpenVoiceStyleModal();
+  }
+
+  resetOpenVoiceStyles(): void {
+    this.draftOpenVoiceStyles.set(emptyOpenVoiceStyles());
+  }
+
+  setDraftOpenVoiceStyle(key: OpenVoiceStyleKey, percentage: number): void {
+    const amount = Math.max(0, Math.min(100, Number(percentage) || 0)) / 100;
+    this.draftOpenVoiceStyles.update((styles) => ({ ...styles, [key]: amount }));
+  }
+
+  openVoiceStylePercent(key: OpenVoiceStyleKey): number {
+    return Math.round(this.draftOpenVoiceStyles()[key] * 100);
+  }
+
+  onStyleModalKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      this.closeOpenVoiceStyleModal();
+      return;
+    }
+
+    if (event.key !== 'Tab') return;
+
+    const dialog = this.styleDialog?.nativeElement;
+    if (!dialog) return;
+
+    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+    )).filter((element) => !element.hasAttribute('hidden'));
+    if (!focusable.length) {
+      event.preventDefault();
+      dialog.focus();
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  closeStyleModalOnBackdrop(event: MouseEvent): void {
+    if (event.target === event.currentTarget) {
+      this.closeOpenVoiceStyleModal();
+    }
   }
 
   private loadStoredVoices(): void {

@@ -26,6 +26,7 @@ import {
   listVoiceCloningEngines,
   normalizeGenerationEngine,
   normalizeLanguageCode,
+  validateOpenVoiceStyleRequest,
 } from './lib/voice-engines.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -527,7 +528,7 @@ async function verifyOutputWav(outWav, engine) {
   }
 }
 
-async function runVoiceEngineInfer({ text, language, refWav, outWav, jobId, engine, signal }) {
+async function runVoiceEngineInfer({ text, language, refWav, outWav, jobId, engine, styles, signal }) {
   const invocation = buildVoiceEngineCommand({
     engine,
     text,
@@ -535,6 +536,7 @@ async function runVoiceEngineInfer({ text, language, refWav, outWav, jobId, engi
     refWav,
     outWav,
     jobId,
+    styles,
     runtimeConfig: voiceEngineRuntime,
   });
 
@@ -627,13 +629,31 @@ async function storeReferenceAudioFromBuffer({ buffer, mimeType, filename }) {
   return { voiceId: id, uploadedPath, wavPath };
 }
 
-async function generateClonedAudio({ text, refWav, format, engine = 'omnivoice', language, jobId = randomUUID(), signal }) {
+async function generateClonedAudio({
+  text,
+  refWav,
+  format,
+  engine = 'omnivoice',
+  language,
+  styles,
+  jobId = randomUUID(),
+  signal,
+}) {
   validateGenerationText(text);
 
   const selectedEngine = normalizeGenerationEngine(engine);
   const outWav = path.join(OUTPUTS_DIR, `${jobId}.wav`);
   const outPath = path.join(OUTPUTS_DIR, `${jobId}.${format}`);
-  await runVoiceEngineInfer({ text, language, refWav, outWav, jobId, engine: selectedEngine, signal });
+  await runVoiceEngineInfer({
+    text,
+    language,
+    refWav,
+    outWav,
+    jobId,
+    engine: selectedEngine,
+    styles,
+    signal,
+  });
 
   if (format === 'mp3') {
     await convertToMp3(outWav, outPath, signal);
@@ -754,6 +774,13 @@ function createVoiceCloningMcpServer() {
       voiceSampleFilename: z.string().optional().describe('Original filename, used only as a fallback to infer the audio extension.'),
       language: z.enum(['en', 'fr', 'es']).optional().describe('Language hint. Defaults to English.'),
       engine: z.enum(VOICE_CLONING_ENGINE_IDS).optional().describe('Voice cloning engine to use. Defaults to omnivoice.'),
+      styles: z.object({
+        happy: z.number().finite().min(0).max(1).optional(),
+        sad: z.number().finite().min(0).max(1).optional(),
+        terrified: z.number().finite().min(0).max(1).optional(),
+        cheerful: z.number().finite().min(0).max(1).optional(),
+        friendly: z.number().finite().min(0).max(1).optional(),
+      }).strict().optional().describe('Optional OpenVoice English V1 style amounts (0 to 1): happy, sad, terrified, cheerful, friendly.'),
     },
     annotations: {
       title: 'Clone voice to MP3',
@@ -761,7 +788,14 @@ function createVoiceCloningMcpServer() {
       destructiveHint: false,
       idempotentHint: false,
     },
-  }, async ({ voiceSampleBase64, text, voiceSampleMimeType, voiceSampleFilename, language, engine }) => {
+  }, async ({ voiceSampleBase64, text, voiceSampleMimeType, voiceSampleFilename, language, engine, styles }) => {
+    const selectedEngine = normalizeGenerationEngine(engine);
+    const selectedLanguage = language || 'en';
+    const normalizedStyles = validateOpenVoiceStyleRequest({
+      styles,
+      engine: selectedEngine,
+      language: selectedLanguage,
+    });
     const { buffer, mimeType } = decodeBase64Audio(voiceSampleBase64, voiceSampleMimeType);
     const { voiceId, wavPath } = await storeReferenceAudioFromBuffer({
       buffer,
@@ -776,13 +810,14 @@ function createVoiceCloningMcpServer() {
         text,
         refWav: wavPath,
         format: 'mp3',
-        engine,
-        language: language || 'en',
+        engine: selectedEngine,
+        language: selectedLanguage,
+        styles: normalizedStyles,
         jobId: mcpJobId,
         signal,
       }),
     });
-    const { jobId, data, engine: selectedEngine } = await promise;
+    const { jobId, data, engine: generatedEngine } = await promise;
 
     return {
       content: [
@@ -798,8 +833,9 @@ function createVoiceCloningMcpServer() {
             mimeType: 'audio/mpeg',
             voiceId,
             jobId,
-            engine: selectedEngine,
+            engine: generatedEngine,
             language: language || null,
+            styles: normalizedStyles,
           }),
         },
       ],
@@ -965,12 +1001,12 @@ fastify.post('/api/generate/:jobId/cancel', async (request, reply) => {
 
 /**
  * POST /api/generate
- * JSON body: { jobId, voiceId, text, language, engine }
+ * JSON body: { jobId, voiceId, text, language, engine, styles }
  * Runs the selected voice cloning engine, converts the result to WebM/Opus,
  * and streams it back.
  */
 fastify.post('/api/generate', async (request, reply) => {
-  const { jobId, voiceId, text, language, engine } = request.body || {};
+  const { jobId, voiceId, text, language, engine, styles } = request.body || {};
   let selectedEngine;
   try {
     selectedEngine = normalizeGenerationEngine(engine);
@@ -983,6 +1019,17 @@ fastify.post('/api/generate', async (request, reply) => {
     : normalizeLanguageCode(language);
   if (!selectedLanguage) {
     return reply.code(400).send({ error: 'language must resolve to en, fr, or es.' });
+  }
+
+  let normalizedStyles;
+  try {
+    normalizedStyles = validateOpenVoiceStyleRequest({
+      styles,
+      engine: selectedEngine,
+      language: selectedLanguage,
+    });
+  } catch (err) {
+    return reply.code(400).send({ error: err.message });
   }
 
   const generationJobId = jobId || randomUUID();
@@ -1024,6 +1071,7 @@ fastify.post('/api/generate', async (request, reply) => {
           format: 'webm',
           engine: selectedEngine,
           language: selectedLanguage,
+          styles: normalizedStyles,
           jobId: generationJobId,
           signal,
         });
