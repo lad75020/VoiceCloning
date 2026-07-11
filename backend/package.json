@@ -1,12 +1,14 @@
 {
   "name": "voice-cloning-backend",
   "version": "1.0.0",
-  "description": "Fastify backend for voice cloning with OmniVoice and MLX/Qwen",
+  "description": "Fastify backend for voice cloning with six selectable engines",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "test": "node --test",
+    "check:syntax": "node --check server.js && node --check lib/voice-engines.js && python3 -m py_compile inference/*.py",
     "user:add": "node scripts/users.js add",
     "user:delete": "node scripts/users.js delete",
     "user:list": "node scripts/users.js list"

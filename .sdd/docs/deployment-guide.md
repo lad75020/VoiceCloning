@@ -1,139 +1,98 @@
 # Deployment Guide
 
+## Supported shape
+
+The supported deployment shape is still one backend process with:
+
+- local SQLite auth storage
+- local upload and output directories
+- one in-memory generation queue
+- one active synthesis job at a time
+
 ## Prerequisites
 
-### Software Requirements
+- Node.js 20+ and npm
+- `ffmpeg`
+- Conda at `CONDA_BASE`
+- Prepared per-engine Conda environments and model/checkpoint paths
+- Sufficient local disk for:
+  - `backend/data/auth.sqlite`
+  - `backend/uploads`
+  - `backend/outputs`
+  - model repositories and checkpoints outside the repo
 
-| Software | Minimum Version | Purpose |
-|----------|-----------------|---------|
-| Node.js | 20 or newer | Backend and Angular tooling runtime |
-| npm | Bundled with Node.js | Install dependencies and run scripts |
-| ffmpeg | Any version supporting the target formats | Convert uploads to WAV and outputs to WebM or MP3 |
-| Conda | Local installation | Run OmniVoice and MLX/Qwen environments |
-| OmniVoice environment | Project-specific | Provides `omnivoice-infer` |
-| MLX/Qwen environment | Project-specific | Provides `mlx_audio.tts.generate` and related model tooling |
-
-### Runtime Storage
-
-The backend creates and uses these directories:
-
-- `backend/data/` for `auth.sqlite`.
-- `backend/uploads/` for uploaded reference audio and converted WAV files.
-- `backend/outputs/` for generated audio.
-
-Treat these directories as sensitive runtime data. Voice samples can contain biometric data.
-
-### Required Credentials
-
-- At least one local user must exist in the SQLite auth database.
-- A strong JWT signing secret should be supplied with `AUTH_JWT_SECRET` for shared deployments.
-- The MCP endpoint uses a generated bearer token stored in SQLite when not explicitly managed elsewhere.
-
-## Build and Release
-
-### Install Dependencies
+## Install and build
 
 ```bash
 cd frontend
 npm install
+npm run build
 
 cd ../backend
 npm install
+npm test
+npm run check:syntax
 ```
 
-### Build Frontend
-
-```bash
-cd frontend
-npm run build
-```
-
-The Angular production output is written below `frontend/dist/voice-cloning-frontend`. The backend serves `frontend/dist/voice-cloning-frontend/browser` when present.
-
-### Prepare Backend User
+Create at least one user:
 
 ```bash
 cd backend
 npm run user:add -- alice choose-a-strong-password
 ```
 
-Use `npm run user:list` to verify users.
+## Engine preparation
 
-## Deployment Process
+Before starting the backend, provision only the engines you intend to expose.
 
-### Production-Style Local Deployment
+- `omnivoice`: install `omnivoice-infer` in `OMNIVOICE_CONDA_ENV`
+- `mlx-qwen`: install `mlx-audio` in `MLX_QWEN_CONDA_ENV`
+- `chatterbox`: install the repo in `CHATTERBOX_CONDA_ENV`, optionally with `CHATTERBOX_REPO_PATH`
+- `cosyvoice`: install the repo in `COSYVOICE_CONDA_ENV` and set `COSYVOICE_MODEL_PATH`
+- `f5-tts`: install the repo or package in `F5_TTS_CONDA_ENV`
+- `openvoice`: install OpenVoice and MeloTTS in `OPENVOICE_CONDA_ENV`, set `OPENVOICE_CHECKPOINTS_PATH`, and verify the per-language source speaker embeddings
 
-1. Install dependencies in both packages.
-2. Build the frontend.
-3. Configure backend environment variables for the host, port, Conda paths, engine models, auth database, and JWT secret.
-4. Create at least one user.
-5. Start the backend:
+The app never downloads multi-GB models during `npm install`.
+
+## Start
 
 ```bash
 cd backend
 npm start
 ```
 
-6. Open the backend URL in a browser. If the frontend build exists, the backend serves the app from the same process.
+If `frontend/dist/voice-cloning-frontend/browser` exists, the backend serves the frontend build.
 
-### Development Deployment
+## Verification
 
-Run two processes:
+Authenticated checks:
 
-```bash
-cd backend
-npm run dev
-```
+1. Log in through the browser UI.
+2. Call `GET /api/health`.
+3. Confirm all intended engine IDs appear.
+4. Confirm `configured: true` only for engines whose Conda env and model/checkpoint settings are ready.
 
-```bash
-cd frontend
-npm start
-```
+Runtime verification:
 
-The frontend dev server proxies `/api` to `http://localhost:17992`.
+1. Upload a short voice sample.
+2. Generate once with each enabled engine.
+3. Confirm the backend returns:
+   - WebM/Opus for browser requests
+   - MP3 for MCP requests
+4. Confirm cancellation still works on a long-running request.
 
-### Rollback
+## Operational notes
 
-No repository-defined release artifact, container image, or automated rollback process was found. For local deployments, rollback means restoring the previous code checkout, reinstalling dependencies if needed, rebuilding the frontend, and restarting the backend. Preserve `backend/data/auth.sqlite` if users and sessions should survive rollback.
+- Queue behavior is process-local. Restarting the process drops queued jobs.
+- Output verification is strict. If an engine writes to the wrong path or leaves an empty WAV, the request fails explicitly.
+- OpenVoice, CosyVoice, Chatterbox, and F5-TTS can have larger Python dependency footprints than OmniVoice or MLX/Qwen. Isolate them in separate Conda envs.
+- Protect the deployment with TLS and network controls before exposing it outside a trusted private network.
 
-## Health Checks
+## Rollback
 
-| Endpoint | Method | Expected Response | Checks |
-|----------|--------|-------------------|--------|
-| `/api/health` | GET | JSON with `status` equal to `ok` and a list of engines | Backend is running and can report configured engine options |
+Rollback remains manual:
 
-Authentication is required for `/api/health` because the backend preHandler protects `/api/` routes except login. Check health with a valid user bearer session.
-
-## Operational Procedures
-
-### User Administration
-
-```bash
-cd backend
-npm run user:add -- alice choose-a-strong-password
-npm run user:list
-npm run user:delete -- alice
-```
-
-The `AUTH_DB_PATH` environment variable can point these commands at a non-default database.
-
-### Logs
-
-The Fastify backend uses the built-in logger at info level. In foreground operation, logs are written to stdout and stderr of the Node.js process.
-
-### Runtime Data Management
-
-- Back up `backend/data/auth.sqlite` if local users must be preserved.
-- Periodically review `backend/uploads/` and `backend/outputs/` because generated media can consume disk space.
-- Do not commit runtime media or SQLite files to source control.
-
-### Security Operations
-
-- Set `AUTH_JWT_SECRET` explicitly for shared deployments.
-- Keep the app behind TLS and trusted network controls before exposing it outside localhost or a private network.
-- Protect bearer credentials for both HTTP users and MCP clients.
-- Treat uploaded and generated audio as sensitive data.
-
-### Scaling
-
-No horizontal scaling configuration was found. The in-memory generation queue and local filesystem storage make a single backend process the supported deployment shape unless the queue, uploads, outputs, and auth database are externalized.
+1. restore the previous checkout
+2. rebuild the frontend if required
+3. restart the backend
+4. preserve `backend/data/auth.sqlite` if users and sessions should survive

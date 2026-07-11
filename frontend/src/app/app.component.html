@@ -107,7 +107,8 @@
       </h1>
       <p class="vc-subtitle">
         Record a short reference, type what you want to say, and generate
-        natural speech using OmniVoice or MLX/Qwen.
+        natural speech with OmniVoice, MLX/Qwen, Chatterbox, CosyVoice,
+        F5-TTS, or OpenVoice V2.
       </p>
     </section>
 
@@ -271,9 +272,7 @@
                         [disabled]="generating()">
                   <span class="vc-engine-mark"></span>
                   <span class="vc-engine-name">{{ option.label }}</span>
-                  <span class="vc-engine-sub">
-                    {{ option.id === 'omnivoice' ? 'k2-fsa · multilingual' : 'Apple Silicon · MLX' }}
-                  </span>
+                  <span class="vc-engine-sub">{{ option.subtitle }}</span>
                 </button>
               }
             </div>
@@ -386,7 +385,9 @@
     }
 
     <footer class="vc-footer">
-      <span>OmniVoice · MLX/Qwen · Fastify · Angular</span>
+      <span>OmniVoice · MLX/Qwen · Chatterbox · CosyVoice · F5-TTS · OpenVoice V2</span>
+      <span class="vc-foot-dot">•</span>
+      <span>Fastify · Angular · MCP</span>
       <span class="vc-foot-dot">•</span>
       <span class="mono">https://mac-studio.tail4d2ab4.ts.net:17992</span>
     </footer>

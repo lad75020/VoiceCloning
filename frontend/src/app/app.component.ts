@@ -13,6 +13,7 @@ interface LanguageOption {
 interface EngineOption {
   id: string;
   label: string;
+  subtitle: string;
 }
 
 interface StoredVoiceSample {
@@ -40,8 +41,12 @@ export class AppComponent implements OnDestroy {
   private themeOverride: 'light' | 'dark' | null = null;
 
   readonly engines: EngineOption[] = [
-    { id: 'omnivoice', label: 'OmniVoice' },
-    { id: 'mlx-qwen', label: 'MLX/Qwen' },
+    { id: 'omnivoice', label: 'OmniVoice', subtitle: 'k2-fsa · multilingual' },
+    { id: 'mlx-qwen', label: 'MLX/Qwen', subtitle: 'Apple Silicon · MLX' },
+    { id: 'chatterbox', label: 'Chatterbox', subtitle: 'Reference prompt · multilingual' },
+    { id: 'cosyvoice', label: 'CosyVoice', subtitle: 'Cross-lingual · no ref transcript' },
+    { id: 'f5-tts', label: 'F5-TTS', subtitle: 'Built-in ASR · CLI clone' },
+    { id: 'openvoice', label: 'OpenVoice V2', subtitle: 'MeloTTS + tone conversion' },
   ];
 
   readonly languages: LanguageOption[] = [

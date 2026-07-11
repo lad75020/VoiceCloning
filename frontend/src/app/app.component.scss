@@ -451,7 +451,7 @@
 /* ============ ENGINES ============ */
 .vc-engine-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 .vc-engine {
@@ -685,11 +685,16 @@
 }
 .vc-foot-dot { opacity: .5; }
 
+@media (max-width: 1100px) {
+  .vc-engine-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 @media (max-width: 600px) {
   .vc-main { padding: 36px 18px 56px; }
   .vc-nav-inner { padding: 12px 18px; }
   .vc-status-pill { display: none; }
   .vc-card-body { padding: 18px; }
   .vc-card-head { padding: 18px; }
+  .vc-footer { flex-wrap: wrap; text-align: center; }
   .vc-engine-row { grid-template-columns: 1fr; }
 }

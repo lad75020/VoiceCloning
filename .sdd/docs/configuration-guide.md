@@ -2,88 +2,124 @@
 
 ## Overview
 
-VoiceCloning is configured with backend environment variables, frontend Angular configuration, and runtime files under `backend/`. The backend reads `process.env` at startup and falls back to defaults in `backend/server.js`. The frontend development server uses `frontend/proxy.conf.json` to forward `/api` requests to the backend.
+The backend reads environment variables at startup and builds one runtime config object for all six engines in `backend/lib/voice-engines.js`.
 
-Precedence is environment variable first, then the default hardcoded in the source. SQLite settings such as the generated JWT secret and MCP auth token are persisted in `backend/data/auth.sqlite` when explicit environment variables are not supplied.
+Priority:
 
-## Environment Variables
+1. explicit environment variable
+2. derived default from another engine-specific variable or `CONDA_ENV`
+3. hardcoded default in `voice-engines.js`
 
-### Server
+## Core variables
 
-| Variable | Type | Default | Required | Description |
-|----------|------|---------|----------|-------------|
-| `HOST` | string | `0.0.0.0` | No | Bind address for Fastify. |
-| `PORT` | integer | `17992` | No | Backend HTTP port. |
-| `BODY_LIMIT` | integer bytes | Computed from `MAX_AUDIO_SAMPLE_BYTES` | No | Maximum request body size for JSON and MCP payloads. |
+| Variable | Default | Purpose |
+|---|---|---|
+| `HOST` | `0.0.0.0` | Fastify bind address |
+| `PORT` | `17992` | Fastify port |
+| `FFMPEG_BIN` | `ffmpeg` | Input/output conversion binary |
+| `MAX_TEXT_LENGTH` | `5000` | Request validation limit |
+| `MAX_AUDIO_SAMPLE_BYTES` | `104857600` | Upload and MCP base64 limit |
+| `BODY_LIMIT` | derived | Fastify body limit |
+| `AUTH_DB_PATH` | `backend/data/auth.sqlite` | SQLite auth DB |
+| `AUTH_JWT_SECRET` | generated and persisted if absent | JWT signing secret |
+| `AUTH_SESSION_TTL_SECONDS` | `43200` | Session lifetime |
+| `AUTH_INITIAL_USERNAME` | unset | Optional bootstrap user |
+| `AUTH_INITIAL_PASSWORD` | unset | Optional bootstrap password |
+| `CONDA_BASE` | `/Volumes/WDBlack4TB/opt/miniconda3` | Root used to derive `bin/conda` |
+| `CONDA_ENV` | `omnivoice` | Legacy fallback env for engines without their own override |
 
-### Audio and inference
+## Engine variables
 
-| Variable | Type | Default | Required | Description |
-|----------|------|---------|----------|-------------|
-| `CONDA_BASE` | path | `/Volumes/WDBlack4TB/opt/miniconda3` | No | Base Conda installation used to locate `conda`. |
-| `CONDA_ENV` | string | `omnivoice` | No | Conda environment for OmniVoice inference. |
-| `OMNIVOICE_MODEL` | string | `k2-fsa/OmniVoice` | No | OmniVoice model identifier passed to `omnivoice-infer`. |
-| `MLX_CONDA_ENV` | string | `QWEN_CONDA_ENV` or `CONDA_ENV` | No | Conda environment for MLX/Qwen inference. |
-| `MLX_QWEN_MODEL` | string | `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16` | No | MLX/Qwen TTS model identifier. |
-| `MLX_QWEN_STT_MODEL` | string | `mlx-community/whisper-large-v3-turbo-asr-fp16` | No | STT model passed to MLX/Qwen generation. |
-| `FFMPEG_BIN` | command path | `ffmpeg` | No | ffmpeg executable used for input and output conversion. |
-| `MAX_TEXT_LENGTH` | integer chars | `5000` | No | Maximum text length accepted by HTTP and MCP generation. |
-| `MAX_AUDIO_SAMPLE_BYTES` | integer bytes | `104857600` | No | Maximum uploaded or base64-decoded reference sample size. |
+### OmniVoice
 
-### Authentication
+| Variable | Default |
+|---|---|
+| `OMNIVOICE_CONDA_ENV` | `CONDA_ENV` |
+| `OMNIVOICE_MODEL` | `k2-fsa/OmniVoice` |
 
-| Variable | Type | Default | Required | Description |
-|----------|------|---------|----------|-------------|
-| `AUTH_DB_PATH` | path | `backend/data/auth.sqlite` | No | SQLite database path for users, sessions, and auth settings. |
-| `AUTH_JWT_SECRET` | string | Generated and stored in SQLite if absent | Recommended for deployment | Secret used to sign user JWTs. Set explicitly for shared deployments. |
-| `AUTH_SESSION_TTL_SECONDS` | integer seconds | `43200` | No | Session lifetime for generated JWTs and session rows. |
-| `AUTH_INITIAL_USERNAME` | string | unset | No | Optional username used to create the first user if no users exist. |
-| `AUTH_INITIAL_PASSWORD` | string | unset | No | Optional password used with `AUTH_INITIAL_USERNAME` for first-user bootstrap. |
+### MLX/Qwen
 
-## Configuration Files
+| Variable | Default |
+|---|---|
+| `MLX_QWEN_CONDA_ENV` | `MLX_CONDA_ENV`, then `QWEN_CONDA_ENV`, then `CONDA_ENV` |
+| `MLX_QWEN_MODEL` | `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16` |
+| `MLX_QWEN_STT_MODEL` | `mlx-community/whisper-large-v3-turbo-asr-fp16` |
 
-### `frontend/proxy.conf.json`
+### Chatterbox
 
-The Angular dev server forwards `/api` to `http://localhost:17992`. This matches the backend default port.
+| Variable | Default |
+|---|---|
+| `CHATTERBOX_CONDA_ENV` | `chatterbox` |
+| `CHATTERBOX_REPO_PATH` | unset |
+| `CHATTERBOX_MODEL` | `ResembleAI/chatterbox` |
+| `CHATTERBOX_DEVICE` | `auto` |
+| `CHATTERBOX_T3_MODEL` | `v3` |
 
-### `frontend/angular.json`
+### CosyVoice
 
-The Angular project builds to `frontend/dist/voice-cloning-frontend`, includes assets from `frontend/public`, includes Bootstrap CSS and JS, and uses Karma for `npm test`.
+| Variable | Default |
+|---|---|
+| `COSYVOICE_CONDA_ENV` | `cosyvoice` |
+| `COSYVOICE_REPO_PATH` | unset |
+| `COSYVOICE_MODEL_PATH` | unset, required to run |
 
-### `backend/data/auth.sqlite`
+### F5-TTS
 
-This runtime SQLite database is created automatically. It contains:
+| Variable | Default |
+|---|---|
+| `F5_TTS_CONDA_ENV` | `f5-tts` |
+| `F5_TTS_REPO_PATH` | unset |
+| `F5_TTS_MODEL` | `F5TTS_v1_Base` |
 
-- `users`: local user records and password hashes.
-- `sessions`: server-side session rows with token hashes, expiry, and revocation state.
-- `auth_settings`: persisted generated values such as the fallback JWT secret and MCP auth token.
+### OpenVoice V2
 
-Do not commit this database or share it outside the trusted deployment boundary.
+| Variable | Default or derived value |
+|---|---|
+| `OPENVOICE_CONDA_ENV` | `openvoice` |
+| `OPENVOICE_REPO_PATH` | unset |
+| `OPENVOICE_CHECKPOINTS_PATH` | unset; set to the extracted `checkpoints_v2` directory |
+| `OPENVOICE_DEVICE` | `auto` |
+| `OPENVOICE_CONVERTER_CONFIG_PATH` | `${OPENVOICE_CHECKPOINTS_PATH}/converter/config.json` |
+| `OPENVOICE_CONVERTER_CHECKPOINT_PATH` | `${OPENVOICE_CHECKPOINTS_PATH}/converter/checkpoint.pth` |
+| `OPENVOICE_MELO_LANGUAGE_EN` | `EN_NEWEST` |
+| `OPENVOICE_MELO_SPEAKER_EN` | `EN-Newest` |
+| `OPENVOICE_SOURCE_SE_EN_PATH` | `${OPENVOICE_CHECKPOINTS_PATH}/base_speakers/ses/en-newest.pth` |
+| `OPENVOICE_MELO_LANGUAGE_FR` | `FR` |
+| `OPENVOICE_MELO_SPEAKER_FR` | `FR` |
+| `OPENVOICE_SOURCE_SE_FR_PATH` | `${OPENVOICE_CHECKPOINTS_PATH}/base_speakers/ses/fr.pth` |
+| `OPENVOICE_MELO_LANGUAGE_ES` | `ES` |
+| `OPENVOICE_MELO_SPEAKER_ES` | `ES` |
+| `OPENVOICE_SOURCE_SE_ES_PATH` | `${OPENVOICE_CHECKPOINTS_PATH}/base_speakers/ses/es.pth` |
 
-## Validation Rules
+## Input normalization
 
-| Config or input | Rule | Error behavior |
-|-----------------|------|----------------|
-| `PORT` | Parsed as base-10 integer | Fastify listen fails if the resulting port is invalid. |
-| `MAX_TEXT_LENGTH` | Parsed as base-10 integer | Text longer than the value returns a 400 for HTTP generation or fails validation for MCP generation. |
-| `MAX_AUDIO_SAMPLE_BYTES` | Parsed as base-10 integer | Multipart upload is limited by Fastify multipart; MCP base64 audio above this size is rejected. |
-| `engine` | Normalized to `omnivoice` or `mlx-qwen` | Unsupported values throw an unsupported engine error. |
-| `language` | Optional BCP-47-like short language code | Invalid values are ignored for MLX/Qwen command arguments. |
-| `jobId` | String matching a UUID-like hex and dash pattern | Invalid generation or cancel job IDs return 400. |
-| `voiceId` | String matching a UUID-like hex and dash pattern | Invalid voice IDs return 400 to avoid path traversal. |
+- Engines normalize to the six canonical IDs.
+- HTTP aliases such as `mlx`, `qwen`, `cosy`, `f5`, and `openvoice-v2` are accepted.
+- MCP schema accepts only the canonical IDs.
+- Language inputs normalize to `en`, `fr`, or `es`.
+- Locale-style values such as `en-US`, `fr-FR`, and `es_419` map gracefully.
 
-## Deployment Profiles
+## Health endpoint
 
-### Development
+`GET /api/health` returns:
 
-- Run backend and frontend separately.
-- Backend default URL is `http://localhost:17992`.
-- Angular `npm start` uses `proxy.conf.json` for `/api`.
-- CORS allows all origins in backend source.
+- `status: "ok"`
+- `engines`: an array of six engine records with:
+  - `id`
+  - `label`
+  - `subtitle`
+  - `configured`
 
-### Production-style local run
+`configured: false` means the backend can identify missing required config before starting a model process.
 
-- Build the frontend first.
-- Start the backend from `backend/`.
-- The backend serves the Angular production build if `frontend/dist/voice-cloning-frontend/browser` exists.
-- Set a strong `AUTH_JWT_SECRET` and protect the service with TLS and network access controls before exposing it beyond a trusted local network.
+## Runtime validation
+
+| Input or config | Behavior |
+|---|---|
+| unsupported engine | HTTP 400 or MCP schema rejection |
+| invalid `jobId` | HTTP 400 |
+| invalid `voiceId` | HTTP 400 |
+| text longer than `MAX_TEXT_LENGTH` | HTTP 400 or MCP validation failure |
+| missing CosyVoice model path | actionable runtime error before spawn |
+| missing OpenVoice checkpoint mapping | actionable runtime error before spawn |
+| missing or empty output WAV | engine failure with expected path in the error |

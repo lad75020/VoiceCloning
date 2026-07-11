@@ -19,6 +19,14 @@ import {
   timingSafeEqual,
 } from 'crypto';
 import { DatabaseSync } from 'node:sqlite';
+import {
+  VOICE_CLONING_ENGINE_IDS,
+  buildVoiceEngineCommand,
+  createVoiceEngineRuntimeConfig,
+  listVoiceCloningEngines,
+  normalizeGenerationEngine,
+  normalizeLanguageCode,
+} from './lib/voice-engines.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,12 +36,6 @@ const OUTPUTS_DIR = path.join(__dirname, 'outputs');
 const DATA_DIR = path.join(__dirname, 'data');
 
 // Environment configuration
-const CONDA_BASE = process.env.CONDA_BASE || '/Volumes/WDBlack4TB/opt/miniconda3';
-const CONDA_ENV = process.env.CONDA_ENV || 'omnivoice';
-const OMNIVOICE_MODEL = process.env.OMNIVOICE_MODEL || 'k2-fsa/OmniVoice';
-const MLX_CONDA_ENV = process.env.MLX_CONDA_ENV || process.env.QWEN_CONDA_ENV || CONDA_ENV;
-const MLX_QWEN_MODEL = process.env.MLX_QWEN_MODEL || 'mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16';
-const MLX_QWEN_STT_MODEL = process.env.MLX_QWEN_STT_MODEL || 'mlx-community/whisper-large-v3-turbo-asr-fp16';
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg';
 const PORT = parseInt(process.env.PORT || '17992', 10);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -61,20 +63,16 @@ const AUDIO_EXT_BY_MIME = {
   'audio/x-wav': 'wav',
 };
 
-const VOICE_CLONING_ENGINES = {
-  omnivoice: {
-    id: 'omnivoice',
-    label: 'OmniVoice',
-  },
-  'mlx-qwen': {
-    id: 'mlx-qwen',
-    label: 'MLX/Qwen',
-  },
-};
-
 await fs.mkdir(UPLOADS_DIR, { recursive: true });
 await fs.mkdir(OUTPUTS_DIR, { recursive: true });
 await fs.mkdir(DATA_DIR, { recursive: true });
+
+const voiceEngineRuntime = createVoiceEngineRuntimeConfig({
+  env: process.env,
+  backendDir: __dirname,
+  outputsDir: OUTPUTS_DIR,
+  uploadsDir: UPLOADS_DIR,
+});
 
 const authDb = new DatabaseSync(AUTH_DB_PATH);
 authDb.exec('PRAGMA journal_mode = WAL');
@@ -376,6 +374,13 @@ function runCommand(cmd, args, opts = {}) {
     });
     let stdout = '';
     let stderr = '';
+    const maxCapturedOutputChars = 1_000_000;
+    const appendCapturedOutput = (current, chunk) => {
+      const combined = current + chunk.toString();
+      return combined.length > maxCapturedOutputChars
+        ? combined.slice(-maxCapturedOutputChars)
+        : combined;
+    };
 
     const cleanup = () => {
       if (killTimer) clearTimeout(killTimer);
@@ -404,8 +409,8 @@ function runCommand(cmd, args, opts = {}) {
       killTimer = setTimeout(() => killChild('SIGKILL'), 5000);
     };
 
-    child.stdout?.on('data', (d) => { stdout += d.toString(); });
-    child.stderr?.on('data', (d) => { stderr += d.toString(); });
+    child.stdout?.on('data', (d) => { stdout = appendCapturedOutput(stdout, d); });
+    child.stderr?.on('data', (d) => { stderr = appendCapturedOutput(stderr, d); });
     child.on('error', (err) => finish(reject, aborted ? createJobCanceledError() : err));
     child.on('close', (code) => {
       if (aborted) {
@@ -432,17 +437,29 @@ function isJobCanceledError(err) {
  * Convert input audio (webm/ogg/m4a/etc.) to mono 16 kHz PCM WAV.
  */
 async function convertToWav(inputPath, outputPath, signal) {
+  const convertsInPlace = path.resolve(inputPath) === path.resolve(outputPath);
+  const ffmpegOutputPath = convertsInPlace ? `${outputPath}.normalized.wav` : outputPath;
   const args = [
     '-y',
     '-i', inputPath,
     '-ac', '1',
     '-ar', '16000',
     '-sample_fmt', 's16',
-    outputPath,
+    ffmpegOutputPath,
   ];
-  const result = await runCommand(FFMPEG_BIN, args, { signal });
-  if (result.code !== 0) {
-    throw new Error(`ffmpeg (to wav) failed: ${result.stderr}`);
+
+  try {
+    const result = await runCommand(FFMPEG_BIN, args, { signal });
+    if (result.code !== 0) {
+      throw new Error(`ffmpeg (to wav) failed: ${result.stderr}`);
+    }
+    if (convertsInPlace) {
+      await fs.rename(ffmpegOutputPath, outputPath);
+    }
+  } finally {
+    if (convertsInPlace) {
+      await fs.unlink(ffmpegOutputPath).catch(() => {});
+    }
   }
 }
 
@@ -482,90 +499,64 @@ async function convertToMp3(inputPath, outputPath, signal) {
   }
 }
 
-/**
- * Invoke omnivoice-infer inside the configured conda env.
- * Uses `conda run` so no shell activation is required.
- */
-async function runOmnivoiceInfer({ text, refWav, outWav, signal }) {
-  const condaBin = path.join(CONDA_BASE, 'bin', 'conda');
-  const args = [
-    'run',
-    '-n', CONDA_ENV,
-    '--no-capture-output',
-    'omnivoice-infer',
-    '--model', OMNIVOICE_MODEL,
-    '--text', text,
-    '--ref_audio', refWav,
-    '--output', outWav,
-  ];
-  fastify.log.info({ cmd: condaBin, args }, 'Running omnivoice-infer');
-  const result = await runCommand(condaBin, args, { signal });
-  if (result.code !== 0) {
-    throw new Error(`omnivoice-infer failed (code ${result.code}): ${result.stderr || result.stdout}`);
-  }
-  return result;
-}
-
-/**
- * Invoke mlx-audio's Qwen3-TTS generator inside the configured conda env.
- * Uses --join_audio so the expected output is exactly `${jobId}.wav`.
- */
-async function runMlxQwenInfer({ text, language, refWav, outWav, jobId, signal }) {
-  const condaBin = path.join(CONDA_BASE, 'bin', 'conda');
-  const args = [
-    'run',
-    '-n', MLX_CONDA_ENV,
-    '--no-capture-output',
-    'python',
-    '-m', 'mlx_audio.tts.generate',
-    '--model', MLX_QWEN_MODEL,
-    '--text', text,
-    '--ref_audio', refWav,
-    '--stt_model', MLX_QWEN_STT_MODEL,
-    '--output_path', OUTPUTS_DIR,
-    '--file_prefix', jobId,
-    '--audio_format', 'wav',
-    '--join_audio',
-  ];
-
-  const langCode = normalizeLanguageCode(language);
-  if (langCode) {
-    args.push('--lang_code', langCode);
-  }
-
-  fastify.log.info({ cmd: condaBin, args }, 'Running MLX/Qwen TTS');
-  const result = await runCommand(condaBin, args, { signal });
-  let outputStats = null;
+async function verifyOutputWav(outWav, engine) {
+  let stats;
   try {
-    outputStats = await fs.stat(outWav);
+    stats = await fs.stat(outWav);
   } catch {
-    // handled below
+    throw new Error(`${engine} did not create the expected WAV output at ${outWav}.`);
   }
 
-  if (result.code !== 0 || !outputStats || outputStats.size === 0) {
-    throw new Error(`MLX/Qwen TTS failed (code ${result.code}): ${result.stderr || result.stdout || 'output WAV was not created'}`);
+  if (!stats.isFile() || stats.size <= 44) {
+    throw new Error(`${engine} created an empty or truncated WAV output at ${outWav}.`);
   }
 
-  return result;
+  const handle = await fs.open(outWav, 'r');
+  try {
+    const header = Buffer.alloc(12);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (
+      bytesRead < header.length
+      || header.subarray(0, 4).toString('ascii') !== 'RIFF'
+      || header.subarray(8, 12).toString('ascii') !== 'WAVE'
+    ) {
+      throw new Error(`${engine} produced a file at ${outWav}, but it is not a valid RIFF/WAVE file.`);
+    }
+  } finally {
+    await handle.close();
+  }
 }
 
-function normalizeGenerationEngine(engine) {
-  const normalized = String(engine || 'omnivoice').trim().toLowerCase();
-  if (['omnivoice', 'omni-voice', 'omni_voice'].includes(normalized)) {
-    return VOICE_CLONING_ENGINES.omnivoice.id;
-  }
-  if (['mlx-qwen', 'mlx/qwen', 'mlx_qwen', 'qwen', 'mlx'].includes(normalized)) {
-    return VOICE_CLONING_ENGINES['mlx-qwen'].id;
-  }
-  throw new Error(`Unsupported voice cloning engine: ${engine}`);
-}
+async function runVoiceEngineInfer({ text, language, refWav, outWav, jobId, engine, signal }) {
+  const invocation = buildVoiceEngineCommand({
+    engine,
+    text,
+    language,
+    refWav,
+    outWav,
+    jobId,
+    runtimeConfig: voiceEngineRuntime,
+  });
 
-function normalizeLanguageCode(language) {
-  const value = String(language || '').trim().toLowerCase();
-  if (/^[a-z]{2,3}(-[a-z0-9]{2,8})?$/i.test(value)) {
-    return value;
+  fastify.log.info({ engine: invocation.engine }, 'Running voice cloning engine');
+
+  const result = await runCommand(invocation.cmd, invocation.args, {
+    signal,
+    cwd: invocation.cwd,
+    env: invocation.env,
+  });
+
+  if (result.code !== 0) {
+    fastify.log.error({
+      engine: invocation.engine,
+      exitCode: result.code,
+      output: (result.stderr || result.stdout || '').trim() || 'no output captured',
+    }, 'Voice cloning engine process failed');
+    throw new Error(`${invocation.engine} inference failed (code ${result.code}). ${invocation.failureHint}`);
   }
-  return null;
+
+  await verifyOutputWav(invocation.expectedOutputPath, invocation.engine);
+  return invocation.engine;
 }
 
 function isValidJobId(jobId) {
@@ -642,12 +633,7 @@ async function generateClonedAudio({ text, refWav, format, engine = 'omnivoice',
   const selectedEngine = normalizeGenerationEngine(engine);
   const outWav = path.join(OUTPUTS_DIR, `${jobId}.wav`);
   const outPath = path.join(OUTPUTS_DIR, `${jobId}.${format}`);
-
-  if (selectedEngine === VOICE_CLONING_ENGINES['mlx-qwen'].id) {
-    await runMlxQwenInfer({ text, language, refWav, outWav, jobId, signal });
-  } else {
-    await runOmnivoiceInfer({ text, refWav, outWav, signal });
-  }
+  await runVoiceEngineInfer({ text, language, refWav, outWav, jobId, engine: selectedEngine, signal });
 
   if (format === 'mp3') {
     await convertToMp3(outWav, outPath, signal);
@@ -766,8 +752,8 @@ function createVoiceCloningMcpServer() {
       text: z.string().min(1).max(MAX_TEXT_LENGTH).describe('Text to synthesize using the reference voice.'),
       voiceSampleMimeType: z.string().optional().describe('MIME type of the voice sample, for example audio/webm, audio/wav, audio/mpeg, audio/flac.'),
       voiceSampleFilename: z.string().optional().describe('Original filename, used only as a fallback to infer the audio extension.'),
-      language: z.string().optional().describe('Optional language hint retained for client metadata.'),
-      engine: z.enum(['omnivoice', 'mlx-qwen']).optional().describe('Voice cloning engine to use. Defaults to omnivoice.'),
+      language: z.enum(['en', 'fr', 'es']).optional().describe('Language hint. Defaults to English.'),
+      engine: z.enum(VOICE_CLONING_ENGINE_IDS).optional().describe('Voice cloning engine to use. Defaults to omnivoice.'),
     },
     annotations: {
       title: 'Clone voice to MP3',
@@ -791,7 +777,7 @@ function createVoiceCloningMcpServer() {
         refWav: wavPath,
         format: 'mp3',
         engine,
-        language,
+        language: language || 'en',
         jobId: mcpJobId,
         signal,
       }),
@@ -855,7 +841,7 @@ fastify.post('/api/auth/logout', async (request) => {
 
 fastify.get('/api/health', async () => ({
   status: 'ok',
-  engines: Object.values(VOICE_CLONING_ENGINES),
+  engines: listVoiceCloningEngines(voiceEngineRuntime),
 }));
 
 /**
@@ -985,6 +971,19 @@ fastify.post('/api/generate/:jobId/cancel', async (request, reply) => {
  */
 fastify.post('/api/generate', async (request, reply) => {
   const { jobId, voiceId, text, language, engine } = request.body || {};
+  let selectedEngine;
+  try {
+    selectedEngine = normalizeGenerationEngine(engine);
+  } catch (err) {
+    return reply.code(400).send({ error: err.message });
+  }
+
+  const selectedLanguage = language == null || String(language).trim() === ''
+    ? 'en'
+    : normalizeLanguageCode(language);
+  if (!selectedLanguage) {
+    return reply.code(400).send({ error: 'language must resolve to en, fr, or es.' });
+  }
 
   const generationJobId = jobId || randomUUID();
   if (!isValidJobId(generationJobId)) {
@@ -1023,8 +1022,8 @@ fastify.post('/api/generate', async (request, reply) => {
           text,
           refWav,
           format: 'webm',
-          engine,
-          language,
+          engine: selectedEngine,
+          language: selectedLanguage,
           jobId: generationJobId,
           signal,
         });
@@ -1047,7 +1046,7 @@ fastify.post('/api/generate', async (request, reply) => {
     .header('Content-Disposition', `inline; filename="${result.jobId}.webm"`)
     .header('Content-Length', result.data.length)
     .header('X-Generation-Job-Id', result.jobId)
-    .header('X-Language', language || '')
+    .header('X-Language', selectedLanguage)
     .header('X-Voice-Cloning-Engine', result.engine)
     .header('X-Generation-Duration-Seconds', generationDurationSeconds.toFixed(2))
     .send(result.data);
