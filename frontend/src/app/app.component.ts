@@ -308,7 +308,7 @@ export class AppComponent implements OnDestroy {
         text: textVal,
         language: this.textLanguage(),
         engine: this.engine(),
-        styles: this.engine() === 'openvoice' ? { ...this.openVoiceStyles() } : undefined,
+        ...(this.engine() === 'openvoice' ? { styles: { ...this.openVoiceStyles() } } : {}),
       }).toPromise();
       if (!res?.body) throw new Error('Empty response from server.');
       const url = URL.createObjectURL(res.body);

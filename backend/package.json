@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test",
+    "test": "node --test && python3 -m unittest discover -s test -p 'test_*.py'",
     "check:syntax": "node --check server.js && node --check lib/voice-engines.js && python3 -m py_compile inference/*.py",
     "user:add": "node scripts/users.js add",
     "user:delete": "node scripts/users.js delete",

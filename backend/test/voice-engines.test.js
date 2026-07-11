@@ -332,6 +332,10 @@ test('OpenVoice style validation expands omitted keys and rejects unsafe values'
 });
 
 test('style request rules reject non-OpenVoice and non-English blends while allowing neutral V2', () => {
+  assert.equal(
+    validateOpenVoiceStyleRequest({ styles: null, engine: 'omnivoice', language: 'en' }),
+    null,
+  );
   assert.throws(
     () => validateOpenVoiceStyleRequest({ styles: { happy: 0 }, engine: 'omnivoice', language: 'en' }),
     /only when engine is openvoice/,

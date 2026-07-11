@@ -224,7 +224,9 @@ function isPlainObject(value) {
  * differ from the values eventually passed to the subprocess.
  */
 export function normalizeOpenVoiceStyles(styles) {
-  if (styles === undefined) {
+  // JSON clients can represent an omitted optional field as null. Treat both
+  // forms as absent, while retaining strict validation for supplied values.
+  if (styles === undefined || styles === null) {
     return null;
   }
   if (!isPlainObject(styles)) {
