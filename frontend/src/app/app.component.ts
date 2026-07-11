@@ -16,6 +16,8 @@ interface EngineOption {
   subtitle: string;
 }
 
+type VoicePromptEngine = 'omnivoice' | 'mlx-qwen';
+
 interface StoredVoiceSample {
   id: string;
   name: string;
@@ -54,8 +56,18 @@ export class AppComponent implements OnDestroy {
   private themeChangeListener: ((event: MediaQueryListEvent) => void) | null = null;
   private themeOverride: 'light' | 'dark' | null = null;
   private styleModalReturnFocus: HTMLElement | null = null;
+  private voicePromptModalReturnFocus: HTMLElement | null = null;
 
   @ViewChild('styleDialog') styleDialog?: ElementRef<HTMLDivElement>;
+  @ViewChild('voicePromptDialog') voicePromptDialog?: ElementRef<HTMLDivElement>;
+
+  readonly omnivoiceInstructOptions = [
+    'male', 'female', 'child', 'teenager', 'young adult', 'middle-aged', 'elderly',
+    'american accent', 'australian accent', 'british accent', 'canadian accent',
+    'chinese accent', 'indian accent', 'japanese accent', 'korean accent',
+    'portuguese accent', 'russian accent', 'very high pitch', 'high pitch',
+    'moderate pitch', 'low pitch', 'very low pitch', 'whisper',
+  ] as const;
 
   readonly engines: EngineOption[] = [
     { id: 'omnivoice', label: 'OmniVoice', subtitle: 'k2-fsa · multilingual' },
@@ -80,6 +92,9 @@ export class AppComponent implements OnDestroy {
   openVoiceStyles = signal<OpenVoiceStyleAmounts>(emptyOpenVoiceStyles());
   draftOpenVoiceStyles = signal<OpenVoiceStyleAmounts>(emptyOpenVoiceStyles());
   styleModalOpen = signal<boolean>(false);
+  voicePrompts = signal<Record<VoicePromptEngine, string>>({ omnivoice: '', 'mlx-qwen': '' });
+  draftVoicePrompt = signal<string>('');
+  voicePromptModalEngine = signal<VoicePromptEngine | null>(null);
   text = signal<string>('');
   loginUsername = signal<string>('');
   loginPassword = signal<string>('');
@@ -107,9 +122,27 @@ export class AppComponent implements OnDestroy {
     () => !!this.recordedBlobUrl() && this.voiceName().trim().length > 0 && !this.uploading(),
   );
 
+  selectedVoicePrompt = computed(() => {
+    const selectedEngine = this.engine();
+    return this.supportsVoicePrompt(selectedEngine)
+      ? this.voicePrompts()[selectedEngine]
+      : '';
+  });
+
   canGenerate = computed(
-    () => !!this.voiceId() && this.text().trim().length > 0 && !this.generating(),
+    () => (this.engine() === 'mlx-qwen' || !!this.voiceId())
+      && this.text().trim().length > 0
+      && (!this.supportsVoicePrompt(this.engine()) || this.selectedVoicePrompt().trim().length > 0)
+      && !this.generating(),
   );
+
+  modalOpen = computed(() => this.styleModalOpen() || this.voicePromptModalEngine() !== null);
+
+  voicePromptSummary = computed(() => {
+    const prompt = this.selectedVoicePrompt().trim();
+    if (!prompt) return 'Not set';
+    return prompt.length > 96 ? `${prompt.slice(0, 93)}…` : prompt;
+  });
 
   hasActiveOpenVoiceStyles = computed(() => (
     Object.values(this.openVoiceStyles()).some((amount) => amount > 0)
@@ -286,7 +319,7 @@ export class AppComponent implements OnDestroy {
   async generate(): Promise<void> {
     const id = this.voiceId();
     const textVal = this.text().trim();
-    if (!id || !textVal) return;
+    if (!textVal || (!id && this.engine() !== 'mlx-qwen')) return;
 
     if (this.engine() === 'openvoice' && this.hasActiveOpenVoiceStyles() && this.textLanguage() !== 'en') {
       this.error.set('OpenVoice styles are supported only for English output. Select English or reset the styles to zero.');
@@ -304,11 +337,12 @@ export class AppComponent implements OnDestroy {
     try {
       const res = await this.api.generate({
         jobId,
-        voiceId: id,
+        ...(typeof id === 'string' ? { voiceId: id } : {}),
         text: textVal,
         language: this.textLanguage(),
         engine: this.engine(),
         ...(this.engine() === 'openvoice' ? { styles: { ...this.openVoiceStyles() } } : {}),
+        ...(this.supportsVoicePrompt(this.engine()) ? { voice_prompt: this.selectedVoicePrompt().trim() } : {}),
       }).toPromise();
       if (!res?.body) throw new Error('Empty response from server.');
       const url = URL.createObjectURL(res.body);
@@ -363,6 +397,87 @@ export class AppComponent implements OnDestroy {
     this.generationSeconds.set(null);
   }
 
+  supportsVoicePrompt(engineId: string): engineId is VoicePromptEngine {
+    return engineId === 'omnivoice' || engineId === 'mlx-qwen';
+  }
+
+  selectEngine(engineId: string, trigger: EventTarget | null = null): void {
+    if (this.supportsVoicePrompt(engineId)) {
+      this.openVoicePromptModal(engineId, trigger);
+    } else if (engineId === 'openvoice') {
+      this.openOpenVoiceStyleModal(trigger);
+    } else {
+      this.engine.set(engineId);
+    }
+  }
+
+  openVoicePromptModal(engineId: string, trigger: EventTarget | null = null): void {
+    if (!this.supportsVoicePrompt(engineId)) return;
+    this.voicePromptModalReturnFocus = trigger instanceof HTMLElement
+      ? trigger
+      : (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    this.draftVoicePrompt.set(this.voicePrompts()[engineId]);
+    this.voicePromptModalEngine.set(engineId);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => this.voicePromptDialog?.nativeElement.focus());
+    });
+  }
+
+  closeVoicePromptModal(): void {
+    this.voicePromptModalEngine.set(null);
+    const returnFocus = this.voicePromptModalReturnFocus;
+    this.voicePromptModalReturnFocus = null;
+    setTimeout(() => returnFocus?.focus());
+  }
+
+  applyVoicePrompt(): void {
+    const prompt = this.draftVoicePrompt().trim();
+    const selectedEngine = this.voicePromptModalEngine();
+    if (!prompt || !selectedEngine) return;
+    this.voicePrompts.update((prompts) => ({ ...prompts, [selectedEngine]: prompt }));
+    this.engine.set(selectedEngine);
+    this.closeVoicePromptModal();
+  }
+
+  voicePromptModalLabel(): string {
+    return this.voicePromptModalEngine() === 'omnivoice' ? 'OMNIVOICE' : 'QWEN MLX';
+  }
+
+  voicePromptModalDescription(): string {
+    return this.voicePromptModalEngine() === 'omnivoice'
+      ? 'Choose one or more supported voice attributes. OmniVoice does not accept free-form descriptions.'
+      : 'Describe how the generated voice should sound. This is sent to Qwen as voice_prompt.';
+  }
+
+  voicePromptPlaceholder(): string {
+    return 'A composed middle-aged male announcer with a deep, rich and magnetic voice…';
+  }
+
+  isOmniVoiceInstructSelected(option: string): boolean {
+    return this.draftVoicePrompt().split(',').map((item) => item.trim()).includes(option);
+  }
+
+  toggleOmniVoiceInstruct(option: string): void {
+    const selected = new Set(
+      this.draftVoicePrompt().split(',').map((item) => item.trim()).filter(Boolean),
+    );
+    if (selected.has(option)) selected.delete(option);
+    else selected.add(option);
+    this.draftVoicePrompt.set(
+      this.omnivoiceInstructOptions.filter((item) => selected.has(item)).join(', '),
+    );
+  }
+
+  onVoicePromptModalKeydown(event: KeyboardEvent): void {
+    this.trapModalFocus(event, this.voicePromptDialog?.nativeElement, () => this.closeVoicePromptModal());
+  }
+
+  closeVoicePromptModalOnBackdrop(event: MouseEvent): void {
+    if (event.target === event.currentTarget) {
+      this.closeVoicePromptModal();
+    }
+  }
+
   openOpenVoiceStyleModal(trigger: EventTarget | null = null): void {
     this.styleModalReturnFocus = trigger instanceof HTMLElement
       ? trigger
@@ -401,19 +516,20 @@ export class AppComponent implements OnDestroy {
   }
 
   onStyleModalKeydown(event: KeyboardEvent): void {
+    this.trapModalFocus(event, this.styleDialog?.nativeElement, () => this.closeOpenVoiceStyleModal());
+  }
+
+  private trapModalFocus(event: KeyboardEvent, dialog: HTMLElement | undefined, close: () => void): void {
     if (event.key === 'Escape') {
       event.preventDefault();
-      this.closeOpenVoiceStyleModal();
+      close();
       return;
     }
 
-    if (event.key !== 'Tab') return;
-
-    const dialog = this.styleDialog?.nativeElement;
-    if (!dialog) return;
+    if (event.key !== 'Tab' || !dialog) return;
 
     const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
     )).filter((element) => !element.hasAttribute('hidden'));
     if (!focusable.length) {
       event.preventDefault();

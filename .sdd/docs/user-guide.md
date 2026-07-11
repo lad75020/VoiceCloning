@@ -45,11 +45,18 @@ Expected result:
 ### OmniVoice
 
 - general multilingual option
-- uses the existing OmniVoice backend path
+- selecting it opens an attribute picker containing only values supported by OmniVoice
+- requires at least one attribute before applying the selection
+- sends the selected comma-separated tags as `voice_prompt`; the backend validates and forwards them to `omnivoice-infer` as `--instruct`
+- does not accept free-form prose; unsupported API values are rejected before inference
+- continues to use the selected reference voice
 
 ### MLX/Qwen
 
 - best fit for Apple Silicon deployments
+- selecting it opens a modal for a natural-language tone and voice description
+- requires a non-empty description before applying the selection; no reference recording is required
+- sends that description as `voice_prompt`; the backend forwards it to MLX/Qwen as `--instruct`
 - uses MLX plus joined WAV output under the hood
 
 ### Chatterbox

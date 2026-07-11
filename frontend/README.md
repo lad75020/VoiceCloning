@@ -29,6 +29,6 @@ npm test
 
 ## UI notes
 
-- The engine selector keeps the same interaction model as before and now renders six cards with data-driven subtitles.
-- The frontend still sends the same request contract to the backend: `jobId`, `voiceId`, `text`, `language`, and `engine`.
+- Engine cards share the same selection pattern. Selecting OmniVoice opens a supported-attribute picker; selecting MLX/Qwen opens a free-form voice-description modal and needs no recorded reference. Selecting OpenVoice opens its style controls.
+- Generation sends `jobId`, `text`, `language`, and `engine`; reference-based engines also send `voiceId`, OmniVoice and MLX/Qwen send `voice_prompt`, and OpenVoice may send `styles`.
 - The browser UI still offers `en`, `fr`, and `es`; backend normalization maps locale-style variants gracefully when requests come from other clients.

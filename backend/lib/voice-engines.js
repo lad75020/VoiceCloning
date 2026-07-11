@@ -29,6 +29,41 @@ export const OPENVOICE_V1_STYLE_SPEAKER_IDS = Object.freeze({
   friendly: 9,
 });
 
+export const OMNIVOICE_ENGLISH_INSTRUCT_ITEMS = Object.freeze([
+  'american accent',
+  'australian accent',
+  'british accent',
+  'canadian accent',
+  'child',
+  'chinese accent',
+  'elderly',
+  'female',
+  'high pitch',
+  'indian accent',
+  'japanese accent',
+  'korean accent',
+  'low pitch',
+  'male',
+  'middle-aged',
+  'moderate pitch',
+  'portuguese accent',
+  'russian accent',
+  'teenager',
+  'very high pitch',
+  'very low pitch',
+  'whisper',
+  'young adult',
+]);
+
+const OMNIVOICE_CHINESE_INSTRUCT_ITEMS = Object.freeze([
+  '东北话', '中年', '中音调', '云南话', '低音调', '儿童', '四川话', '女', '宁夏话',
+  '少年', '极低音调', '极高音调', '桂林话', '河南话', '济南话', '甘肃话', '男',
+  '石家庄话', '老年', '耳语', '贵州话', '陕西话', '青岛话', '青年', '高音调',
+]);
+
+const OMNIVOICE_ENGLISH_INSTRUCT_SET = new Set(OMNIVOICE_ENGLISH_INSTRUCT_ITEMS);
+const OMNIVOICE_CHINESE_INSTRUCT_SET = new Set(OMNIVOICE_CHINESE_INSTRUCT_ITEMS);
+
 export const VOICE_CLONING_ENGINES = Object.freeze({
   omnivoice: {
     id: 'omnivoice',
@@ -191,6 +226,60 @@ export function normalizeGenerationEngine(engine) {
   throw new Error(`Unsupported voice cloning engine: ${engine}`);
 }
 
+function normalizeOmniVoiceInstruct(prompt) {
+  const usesChinese = /[\u3400-\u9fff]/u.test(prompt);
+  const delimiter = usesChinese ? '，' : ',';
+  const allowedItems = usesChinese
+    ? OMNIVOICE_CHINESE_INSTRUCT_SET
+    : OMNIVOICE_ENGLISH_INSTRUCT_SET;
+  const items = prompt
+    .split(delimiter)
+    .map((item) => (usesChinese ? item.trim() : item.trim().toLowerCase()))
+    .filter(Boolean);
+  const unsupported = items.filter((item) => !allowedItems.has(item));
+
+  if (unsupported.length > 0) {
+    const validItems = usesChinese
+      ? OMNIVOICE_CHINESE_INSTRUCT_ITEMS.join('，')
+      : OMNIVOICE_ENGLISH_INSTRUCT_ITEMS.join(', ');
+    throw new Error(
+      `Unsupported OmniVoice instruct item(s): ${unsupported.join(delimiter)}. Use only: ${validItems}.`,
+    );
+  }
+
+  return items.join(delimiter === ',' ? ', ' : delimiter);
+}
+
+export function normalizeVoicePrompt(voicePrompt, engine) {
+  const selectedEngine = normalizeGenerationEngine(engine);
+  if (voicePrompt === undefined || voicePrompt === null) {
+    if (selectedEngine === 'mlx-qwen') {
+      throw new Error('voice_prompt is required when engine is mlx-qwen.');
+    }
+    return null;
+  }
+  if (typeof voicePrompt !== 'string') {
+    throw new Error('voice_prompt must be a string.');
+  }
+
+  const normalized = voicePrompt.trim();
+  if (!normalized) {
+    if (selectedEngine === 'mlx-qwen') {
+      throw new Error('voice_prompt is required when engine is mlx-qwen.');
+    }
+    return null;
+  }
+  if (normalized.length > 1000) {
+    throw new Error('voice_prompt is too long (max 1000 chars).');
+  }
+  if (selectedEngine !== 'omnivoice' && selectedEngine !== 'mlx-qwen') {
+    throw new Error('voice_prompt is supported only when engine is omnivoice or mlx-qwen.');
+  }
+  return selectedEngine === 'omnivoice'
+    ? normalizeOmniVoiceInstruct(normalized)
+    : normalized;
+}
+
 export function normalizeLanguageCode(language) {
   const raw = cleanOptionalString(language);
   if (!raw) {
@@ -310,8 +399,7 @@ export function createVoiceEngineRuntimeConfig({
           || cleanOptionalString(env.MLX_CONDA_ENV)
           || cleanOptionalString(env.QWEN_CONDA_ENV)
           || defaultCondaEnv,
-        model: cleanOptionalString(env.MLX_QWEN_MODEL) || 'mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16',
-        sttModel: cleanOptionalString(env.MLX_QWEN_STT_MODEL) || 'mlx-community/whisper-large-v3-turbo-asr-fp16',
+        model: cleanOptionalString(env.MLX_QWEN_MODEL) || 'mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16',
       },
       chatterbox: {
         condaEnv: cleanOptionalString(env.CHATTERBOX_CONDA_ENV) || 'chatterbox',
@@ -451,9 +539,11 @@ export function buildVoiceEngineCommand({
   outWav,
   jobId,
   styles,
+  voicePrompt,
   runtimeConfig,
 }) {
   const selectedEngine = normalizeGenerationEngine(engine);
+  const normalizedVoicePrompt = normalizeVoicePrompt(voicePrompt, selectedEngine);
   const engineConfig = runtimeConfig.engines[selectedEngine];
   const normalizedLanguage = normalizeLanguageCode(language)
     || (language == null || String(language).trim() === '' ? 'en' : null);
@@ -482,19 +572,23 @@ export function buildVoiceEngineCommand({
   };
 
   if (selectedEngine === 'omnivoice') {
+    const args = [
+      'run',
+      '-n', engineConfig.condaEnv,
+      '--no-capture-output',
+      'omnivoice-infer',
+      '--model', engineConfig.model,
+      '--text', text,
+      '--ref_audio', refWav,
+      '--output', outWav,
+    ];
+    if (normalizedVoicePrompt) {
+      args.push('--instruct', normalizedVoicePrompt);
+    }
     return {
       ...base,
       cmd: runtimeConfig.condaBin,
-      args: [
-        'run',
-        '-n', engineConfig.condaEnv,
-        '--no-capture-output',
-        'omnivoice-infer',
-        '--model', engineConfig.model,
-        '--text', text,
-        '--ref_audio', refWav,
-        '--output', outWav,
-      ],
+      args,
       failureHint: 'Verify OMNIVOICE_CONDA_ENV, OMNIVOICE_MODEL, and omnivoice-infer availability.',
     };
   }
@@ -508,21 +602,22 @@ export function buildVoiceEngineCommand({
       '-m', 'mlx_audio.tts.generate',
       '--model', engineConfig.model,
       '--text', text,
-      '--ref_audio', refWav,
-      '--stt_model', engineConfig.sttModel,
+    ];
+    args.push(
       '--output_path', path.dirname(outWav),
       '--file_prefix', jobId,
       '--audio_format', 'wav',
       '--join_audio',
-    ];
+    );
     if (normalizedLanguage) {
       args.push('--lang_code', normalizedLanguage);
     }
+    args.push('--instruct', normalizedVoicePrompt);
     return {
       ...base,
       cmd: runtimeConfig.condaBin,
       args,
-      failureHint: 'Verify MLX_QWEN_CONDA_ENV, MLX_QWEN_MODEL, MLX_QWEN_STT_MODEL, and mlx_audio installation.',
+      failureHint: 'Verify MLX_QWEN_CONDA_ENV, MLX_QWEN_MODEL, and mlx_audio installation.',
     };
   }
 

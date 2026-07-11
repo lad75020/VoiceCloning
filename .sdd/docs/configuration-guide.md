@@ -42,8 +42,7 @@ Priority:
 | Variable | Default |
 |---|---|
 | `MLX_QWEN_CONDA_ENV` | `MLX_CONDA_ENV`, then `QWEN_CONDA_ENV`, then `CONDA_ENV` |
-| `MLX_QWEN_MODEL` | `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16` |
-| `MLX_QWEN_STT_MODEL` | `mlx-community/whisper-large-v3-turbo-asr-fp16` |
+| `MLX_QWEN_MODEL` | `mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16` |
 
 ### Chatterbox
 

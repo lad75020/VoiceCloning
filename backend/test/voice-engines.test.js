@@ -12,6 +12,7 @@ import {
   normalizeGenerationEngine,
   normalizeLanguageCode,
   normalizeOpenVoiceStyles,
+  normalizeVoicePrompt,
   validateOpenVoiceStyleRequest,
 } from '../lib/voice-engines.js';
 
@@ -23,8 +24,7 @@ function createRuntimeConfig() {
       OMNIVOICE_CONDA_ENV: 'omnivoice-env',
       OMNIVOICE_MODEL: 'k2-fsa/OmniVoice',
       MLX_QWEN_CONDA_ENV: 'mlx-env',
-      MLX_QWEN_MODEL: 'mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16',
-      MLX_QWEN_STT_MODEL: 'mlx-community/whisper-large-v3-turbo-asr-fp16',
+      MLX_QWEN_MODEL: 'mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16',
       CHATTERBOX_CONDA_ENV: 'chatterbox-env',
       CHATTERBOX_REPO_PATH: '/repos/chatterbox',
       CHATTERBOX_MODEL: '/models/chatterbox',
@@ -127,7 +127,23 @@ test('command builder preserves omnivoice argv contract', () => {
   ]);
 });
 
-test('command builder preserves mlx/qwen argv contract and language mapping', () => {
+test('command builder forwards OmniVoice voice descriptions through --instruct', () => {
+  const runtimeConfig = createRuntimeConfig();
+  const command = buildVoiceEngineCommand({
+    engine: 'omnivoice',
+    text: 'This is a test for text to speech.',
+    language: 'en',
+    refWav: '/tmp/ref.wav',
+    outWav: '/tmp/out.wav',
+    jobId: 'job-1-instruct',
+    voicePrompt: '  male, British accent  ',
+    runtimeConfig,
+  });
+
+  assert.equal(command.args[command.args.indexOf('--instruct') + 1], 'male, british accent');
+});
+
+test('command builder creates the Qwen VoiceDesign argv contract', () => {
   const runtimeConfig = createRuntimeConfig();
   const command = buildVoiceEngineCommand({
     engine: 'mlx',
@@ -136,6 +152,7 @@ test('command builder preserves mlx/qwen argv contract and language mapping', ()
     refWav: '/tmp/ref.wav',
     outWav: '/workspace/backend/outputs/job-2.wav',
     jobId: 'job-2',
+    voicePrompt: 'A warm French narrator.',
     runtimeConfig,
   });
 
@@ -146,15 +163,14 @@ test('command builder preserves mlx/qwen argv contract and language mapping', ()
     '--no-capture-output',
     'python',
     '-m', 'mlx_audio.tts.generate',
-    '--model', 'mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16',
+    '--model', 'mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16',
     '--text', 'Bonjour',
-    '--ref_audio', '/tmp/ref.wav',
-    '--stt_model', 'mlx-community/whisper-large-v3-turbo-asr-fp16',
     '--output_path', '/workspace/backend/outputs',
     '--file_prefix', 'job-2',
     '--audio_format', 'wav',
     '--join_audio',
     '--lang_code', 'fr',
+    '--instruct', 'A warm French narrator.',
   ]);
 });
 
@@ -187,6 +203,70 @@ test('command builder uses python adapter argv for chatterbox', () => {
     '--t3-model', 'v3',
     '--repo-path', '/repos/chatterbox',
   ]);
+});
+
+test('command builder forwards Qwen tone description as the model instruct prompt', () => {
+  const runtimeConfig = createRuntimeConfig();
+  const command = buildVoiceEngineCommand({
+    engine: 'mlx-qwen',
+    text: 'Evening news',
+    language: 'en',
+    refWav: '/tmp/ref.wav',
+    outWav: '/workspace/backend/outputs/qwen-tone.wav',
+    jobId: 'qwen-tone',
+    voicePrompt: '  A composed announcer with a deep, steady voice.  ',
+    runtimeConfig,
+  });
+
+  assert.equal(
+    command.args[command.args.indexOf('--instruct') + 1],
+    'A composed announcer with a deep, steady voice.',
+  );
+  assert.equal(command.args.includes('--ref_audio'), false);
+  assert.equal(command.args.includes('--stt_model'), false);
+});
+
+test('Qwen defaults to the MLX VoiceDesign checkpoint', () => {
+  const runtimeConfig = createVoiceEngineRuntimeConfig({
+    env: { CONDA_BASE: '/opt/miniconda3', CONDA_ENV: 'mlx-env' },
+    backendDir: '/workspace/backend',
+    outputsDir: '/workspace/backend/outputs',
+    uploadsDir: '/workspace/backend/uploads',
+  });
+
+  assert.equal(
+    runtimeConfig.engines['mlx-qwen'].model,
+    'mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16',
+  );
+});
+
+test('voice_prompt validation supports OmniVoice and Qwen while rejecting other engines', () => {
+  assert.equal(normalizeVoicePrompt('  Male, British Accent  ', 'omnivoice'), 'male, british accent');
+  assert.equal(
+    normalizeVoicePrompt('  Warm, reassuring, and measured.  ', 'mlx-qwen'),
+    'Warm, reassuring, and measured.',
+  );
+  assert.equal(normalizeVoicePrompt(undefined, 'omnivoice'), null);
+  assert.throws(
+    () => normalizeVoicePrompt('enthousiaste et calme. assez rapide', 'omnivoice'),
+    /unsupported OmniVoice instruct item.*enthousiaste et calme\. assez rapide/i,
+  );
+  assert.throws(
+    () => normalizeVoicePrompt(undefined, 'mlx-qwen'),
+    /voice_prompt is required when engine is mlx-qwen/,
+  );
+  assert.throws(
+    () => normalizeVoicePrompt('Warm', 'openvoice'),
+    /voice_prompt is supported only when engine is omnivoice or mlx-qwen/,
+  );
+  assert.throws(
+    () => normalizeVoicePrompt(42, 'mlx-qwen'),
+    /voice_prompt must be a string/,
+  );
+  assert.throws(
+    () => normalizeVoicePrompt('x'.repeat(1001), 'mlx-qwen'),
+    /voice_prompt is too long/,
+  );
 });
 
 test('command builder uses python adapter argv for cosyvoice', () => {

@@ -1,6 +1,6 @@
 <div class="vc-shell">
   <!-- Top nav -->
-  <header class="vc-nav" [attr.inert]="styleModalOpen() ? '' : null">
+  <header class="vc-nav" [attr.inert]="modalOpen() ? '' : null">
     <div class="vc-nav-inner">
       <div class="vc-brand">
         <span class="vc-logo" aria-hidden="true">
@@ -39,7 +39,7 @@
     </div>
   </header>
 
-  <main class="vc-main" [attr.inert]="styleModalOpen() ? '' : null">
+  <main class="vc-main" [attr.inert]="modalOpen() ? '' : null">
     @if (!auth.isAuthenticated()) {
       <section class="vc-card vc-login-card">
         <div class="vc-card-head">
@@ -268,7 +268,7 @@
                 <button type="button"
                         class="vc-engine"
                         [class.vc-engine-on]="engine() === option.id"
-                        (click)="option.id === 'openvoice' ? openOpenVoiceStyleModal($event.currentTarget) : engine.set(option.id)"
+                        (click)="selectEngine(option.id, $event.currentTarget)"
                         [disabled]="generating()">
                   <span class="vc-engine-mark"></span>
                   <span class="vc-engine-name">{{ option.label }}</span>
@@ -276,6 +276,14 @@
                 </button>
               }
             </div>
+            @if (supportsVoicePrompt(engine())) {
+              <div class="vc-style-summary" aria-live="polite">
+                <span><strong>Voice prompt:</strong> {{ voicePromptSummary() }}</span>
+                <button type="button" class="vc-btn vc-btn-ghost vc-btn-small" (click)="openVoicePromptModal(engine(), $event.currentTarget)" [disabled]="generating()">
+                  Edit voice
+                </button>
+              </div>
+            }
             @if (engine() === 'openvoice') {
               <div class="vc-style-summary" aria-live="polite">
                 <span><strong>Style:</strong> {{ openVoiceStyleSummary() }}</span>
@@ -349,7 +357,12 @@
             </button>
           }
 
-          @if (!voiceId()) {
+          @if (engine() === 'mlx-qwen') {
+            <div class="vc-hint">
+              Qwen VoiceDesign uses the voice description; no reference recording is required.
+            </div>
+          }
+          @if (!voiceId() && engine() !== 'mlx-qwen') {
             <div class="vc-hint">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
@@ -407,6 +420,66 @@
 
     }
   </main>
+
+  @if (voicePromptModalEngine()) {
+    <div class="vc-style-modal-backdrop" (click)="closeVoicePromptModalOnBackdrop($event)">
+      <section #voicePromptDialog
+               class="vc-style-modal"
+               role="dialog"
+               aria-modal="true"
+               aria-labelledby="voicePromptTitle"
+               aria-describedby="voicePromptDescription"
+               tabindex="-1"
+               (keydown)="onVoicePromptModalKeydown($event)">
+        <div class="vc-style-modal-head">
+          <div>
+            <span class="vc-eyebrow">{{ voicePromptModalLabel() }}</span>
+            <h2 id="voicePromptTitle">Describe the expected voice</h2>
+            <p id="voicePromptDescription">{{ voicePromptModalDescription() }}</p>
+          </div>
+          <button type="button" class="vc-icon-btn" (click)="closeVoicePromptModal()" aria-label="Close voice description dialog">×</button>
+        </div>
+
+        <div class="vc-tone-modal-body">
+          @if (voicePromptModalEngine() === 'omnivoice') {
+            <span class="vc-label">Voice attributes</span>
+            <div class="vc-chip-row vc-instruct-options" role="group" aria-label="OmniVoice attributes">
+              @for (option of omnivoiceInstructOptions; track option) {
+                <button type="button"
+                        class="vc-chip"
+                        [class.vc-chip-on]="isOmniVoiceInstructSelected(option)"
+                        [attr.aria-pressed]="isOmniVoiceInstructSelected(option)"
+                        (click)="toggleOmniVoiceInstruct(option)">
+                  {{ option }}
+                </button>
+              }
+            </div>
+            <p class="vc-hint">Only these attributes are supported by OmniVoice and forwarded through <code>--instruct</code>.</p>
+          } @else {
+            <label class="vc-label" for="voicePrompt">Voice description</label>
+            <textarea id="voicePrompt"
+                      class="vc-textarea"
+                      rows="6"
+                      maxlength="1000"
+                      autofocus
+                      [placeholder]="voicePromptPlaceholder()"
+                      [ngModel]="draftVoicePrompt()"
+                      (ngModelChange)="draftVoicePrompt.set($event)"></textarea>
+            <div class="vc-label-row vc-tone-count-row">
+              <span class="vc-hint">Include timbre, age, accent, emotion, pace, and articulation.</span>
+              <span class="vc-count mono">{{ draftVoicePrompt().length }} / 1000</span>
+            </div>
+          }
+        </div>
+
+        <div class="vc-style-modal-actions">
+          <span class="vc-style-actions-spacer"></span>
+          <button type="button" class="vc-btn vc-btn-ghost" (click)="closeVoicePromptModal()">Cancel</button>
+          <button type="button" class="vc-btn vc-btn-primary" (click)="applyVoicePrompt()" [disabled]="!draftVoicePrompt().trim()">Apply</button>
+        </div>
+      </section>
+    </div>
+  }
 
   @if (styleModalOpen()) {
     <div class="vc-style-modal-backdrop" (click)="closeStyleModalOnBackdrop($event)">

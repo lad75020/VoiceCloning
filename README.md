@@ -1,6 +1,6 @@
 # VoiceCloning
 
-VoiceCloning is an authenticated Angular + Fastify studio for recording a reference voice, generating cloned speech over HTTP or MCP, and returning browser WebM/Opus or MCP MP3 output without changing the existing queue, cancellation, and upload workflow. OpenVoice additionally offers an English style modal with weighted Happy, Sad, Terrified, Cheerful, and Friendly controls.
+VoiceCloning is an authenticated Angular + Fastify studio for recording a reference voice, generating cloned speech over HTTP or MCP, and returning browser WebM/Opus or MCP MP3 output without changing the existing queue, cancellation, and upload workflow. MLX/Qwen prompts for a natural-language voice description, while OpenVoice offers weighted English style controls.
 
 ## Engines
 
@@ -75,8 +75,7 @@ OMNIVOICE_CONDA_ENV=omnivoice
 OMNIVOICE_MODEL=k2-fsa/OmniVoice
 
 MLX_QWEN_CONDA_ENV=omnivoice
-MLX_QWEN_MODEL=mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16
-MLX_QWEN_STT_MODEL=mlx-community/whisper-large-v3-turbo-asr-fp16
+MLX_QWEN_MODEL=mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16
 
 CHATTERBOX_CONDA_ENV=chatterbox
 CHATTERBOX_REPO_PATH=/absolute/path/to/chatterbox
@@ -147,6 +146,7 @@ conda run -n omnivoice pip install omnivoice
 ```
 
 - Runtime command: `omnivoice-infer`.
+- Selecting OmniVoice opens a required attribute picker. The browser sends the selected supported tags as `voice_prompt`; the backend validates them and forwards them as `omnivoice-infer --instruct`. OmniVoice does not accept free-form prose.
 - Reference input: converted mono 16 kHz WAV.
 - Output verification: backend requires the exact `${jobId}.wav` to exist and be non-empty.
 
@@ -158,6 +158,8 @@ conda run -n mlx-qwen pip install mlx-audio
 ```
 
 - Best on Apple Silicon.
+- Selecting MLX/Qwen opens a required tone-description modal. The browser sends the description as the top-level `voice_prompt` field of the `/api/generate` JSON body (maximum 1000 characters); no reference recording is required.
+- The backend maps `voice_prompt` to `mlx_audio.tts.generate --instruct`, the MLX/Qwen parameter for CustomVoice emotion/style and VoiceDesign descriptions.
 - Uses `mlx_audio.tts.generate` plus `--join_audio` so the backend expects one exact WAV file.
 
 ### Chatterbox
@@ -274,6 +276,7 @@ Backend tests do not load models. They cover:
 - unsupported engine rejection
 - language normalization
 - argv and adapter argument construction for all six engines
+- OmniVoice and Qwen `voice_prompt` validation and `--instruct` forwarding
 - OpenVoice style validation, V1 argv construction, and zero-style V2 fallback
 
 Commands:

@@ -737,6 +737,12 @@
 .vc-style-modal-head p { margin: 7px 0 0; color: var(--vc-text-muted); font-size: 13px; line-height: 1.5; }
 .vc-style-modal-head .vc-icon-btn { flex: 0 0 auto; font-size: 22px; line-height: 1; }
 .vc-style-controls { padding: 8px 24px 12px; }
+.vc-tone-modal-body { padding: 22px 24px; }
+.vc-tone-modal-body .vc-textarea { margin-top: 9px; resize: vertical; }
+.vc-instruct-options { max-height: 260px; margin-top: 12px; padding: 2px; overflow: auto; }
+.vc-tone-modal-body > .vc-hint { margin: 12px 0 0; }
+.vc-tone-count-row { align-items: center; margin-top: 9px; }
+.vc-tone-count-row .vc-hint { margin-top: 0; }
 .vc-style-control { padding: 16px 0; border-bottom: 1px solid var(--vc-border); }
 .vc-style-control:last-child { border-bottom: none; }
 .vc-style-control label { display: block; margin-bottom: 9px; font-size: 14px; font-weight: 600; }
@@ -766,5 +772,5 @@
   .vc-engine-row { grid-template-columns: 1fr; }
   .vc-style-summary { align-items: flex-start; flex-direction: column; }
   .vc-style-modal-backdrop { padding: 12px; }
-  .vc-style-modal-head, .vc-style-controls, .vc-style-modal-actions { padding-left: 18px; padding-right: 18px; }
+  .vc-style-modal-head, .vc-style-controls, .vc-tone-modal-body, .vc-style-modal-actions { padding-left: 18px; padding-right: 18px; }
 }

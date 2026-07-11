@@ -10,11 +10,12 @@ export interface UploadVoiceResponse {
 
 export interface GenerateRequest {
   jobId: string;
-  voiceId: string;
+  voiceId?: string;
   text: string;
   language: string;
   engine: string;
   styles?: OpenVoiceStyleAmounts;
+  voice_prompt?: string;
 }
 
 export interface OpenVoiceStyleAmounts {

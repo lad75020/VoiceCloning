@@ -103,7 +103,7 @@ frontend/
 - Decision: each engine has its own configurable Conda env plus repo/model/checkpoint settings.
 - Reason: the Python stacks are incompatible enough that one shared environment is fragile.
 
-### UI stays contract-compatible
+### Engine-specific browser fields
 
-- Decision: the frontend request body remains `jobId`, `voiceId`, `text`, `language`, and `engine`.
-- Reason: new engines should not require a browser contract change or extra transcript fields.
+- Decision: shared requests use `jobId`, `text`, `language`, and `engine`; reference-based engines also require `voiceId`, OmniVoice and MLX/Qwen use `voice_prompt`, and OpenVoice may add `styles`.
+- Reason: expressive controls remain explicit and engine-scoped. The backend validates OmniVoice's controlled instruction vocabulary before mapping `voice_prompt` to `--instruct`; Qwen keeps free-form descriptions and skips reference-audio processing for VoiceDesign requests.

@@ -26,6 +26,7 @@ import {
   listVoiceCloningEngines,
   normalizeGenerationEngine,
   normalizeLanguageCode,
+  normalizeVoicePrompt,
   validateOpenVoiceStyleRequest,
 } from './lib/voice-engines.js';
 
@@ -528,7 +529,7 @@ async function verifyOutputWav(outWav, engine) {
   }
 }
 
-async function runVoiceEngineInfer({ text, language, refWav, outWav, jobId, engine, styles, signal }) {
+async function runVoiceEngineInfer({ text, language, refWav, outWav, jobId, engine, styles, voicePrompt, signal }) {
   const invocation = buildVoiceEngineCommand({
     engine,
     text,
@@ -537,6 +538,7 @@ async function runVoiceEngineInfer({ text, language, refWav, outWav, jobId, engi
     outWav,
     jobId,
     styles,
+    voicePrompt,
     runtimeConfig: voiceEngineRuntime,
   });
 
@@ -636,6 +638,7 @@ async function generateClonedAudio({
   engine = 'omnivoice',
   language,
   styles,
+  voicePrompt,
   jobId = randomUUID(),
   signal,
 }) {
@@ -652,6 +655,7 @@ async function generateClonedAudio({
     jobId,
     engine: selectedEngine,
     styles,
+    voicePrompt,
     signal,
   });
 
@@ -774,6 +778,7 @@ function createVoiceCloningMcpServer() {
       voiceSampleFilename: z.string().optional().describe('Original filename, used only as a fallback to infer the audio extension.'),
       language: z.enum(['en', 'fr', 'es']).optional().describe('Language hint. Defaults to English.'),
       engine: z.enum(VOICE_CLONING_ENGINE_IDS).optional().describe('Voice cloning engine to use. Defaults to omnivoice.'),
+      voicePrompt: z.string().min(1).max(1000).optional().describe('Voice instruction. OmniVoice accepts only its documented comma-separated tags (for example: male, british accent); Qwen accepts free-form descriptions.'),
       styles: z.object({
         happy: z.number().finite().min(0).max(1).optional(),
         sad: z.number().finite().min(0).max(1).optional(),
@@ -788,8 +793,9 @@ function createVoiceCloningMcpServer() {
       destructiveHint: false,
       idempotentHint: false,
     },
-  }, async ({ voiceSampleBase64, text, voiceSampleMimeType, voiceSampleFilename, language, engine, styles }) => {
+  }, async ({ voiceSampleBase64, text, voiceSampleMimeType, voiceSampleFilename, language, engine, voicePrompt, styles }) => {
     const selectedEngine = normalizeGenerationEngine(engine);
+    const normalizedVoicePrompt = normalizeVoicePrompt(voicePrompt, selectedEngine);
     const selectedLanguage = language || 'en';
     const normalizedStyles = validateOpenVoiceStyleRequest({
       styles,
@@ -813,6 +819,7 @@ function createVoiceCloningMcpServer() {
         engine: selectedEngine,
         language: selectedLanguage,
         styles: normalizedStyles,
+        voicePrompt: normalizedVoicePrompt,
         jobId: mcpJobId,
         signal,
       }),
@@ -1001,12 +1008,12 @@ fastify.post('/api/generate/:jobId/cancel', async (request, reply) => {
 
 /**
  * POST /api/generate
- * JSON body: { jobId, voiceId, text, language, engine, styles }
+ * JSON body: { jobId, voiceId, text, language, engine, styles, voice_prompt }
  * Runs the selected voice cloning engine, converts the result to WebM/Opus,
  * and streams it back.
  */
 fastify.post('/api/generate', async (request, reply) => {
-  const { jobId, voiceId, text, language, engine, styles } = request.body || {};
+  const { jobId, voiceId, text, language, engine, styles, voice_prompt: voicePrompt } = request.body || {};
   let selectedEngine;
   try {
     selectedEngine = normalizeGenerationEngine(engine);
@@ -1032,11 +1039,19 @@ fastify.post('/api/generate', async (request, reply) => {
     return reply.code(400).send({ error: err.message });
   }
 
+  let normalizedVoicePrompt;
+  try {
+    normalizedVoicePrompt = normalizeVoicePrompt(voicePrompt, selectedEngine);
+  } catch (err) {
+    return reply.code(400).send({ error: err.message });
+  }
+
   const generationJobId = jobId || randomUUID();
   if (!isValidJobId(generationJobId)) {
     return reply.code(400).send({ error: 'Invalid generation jobId.' });
   }
-  if (!voiceId || typeof voiceId !== 'string') {
+  const needsReferenceVoice = selectedEngine !== 'mlx-qwen';
+  if (needsReferenceVoice && (!voiceId || typeof voiceId !== 'string')) {
     return reply.code(400).send({ error: 'voiceId is required.' });
   }
   if (!text || typeof text !== 'string' || !text.trim()) {
@@ -1046,15 +1061,18 @@ fastify.post('/api/generate', async (request, reply) => {
     return reply.code(400).send({ error: `text is too long (max ${MAX_TEXT_LENGTH} chars).` });
   }
   // Basic voiceId sanity to avoid path traversal
-  if (!/^[a-f0-9-]{8,}$/i.test(voiceId)) {
+  if (needsReferenceVoice && !/^[a-f0-9-]{8,}$/i.test(voiceId)) {
     return reply.code(400).send({ error: 'Invalid voiceId.' });
   }
 
-  const refWav = path.join(UPLOADS_DIR, `${voiceId}.wav`);
-  try {
-    await fs.access(refWav);
-  } catch {
-    return reply.code(404).send({ error: 'Reference voice not found; upload it first.' });
+  let refWav = null;
+  if (needsReferenceVoice) {
+    refWav = path.join(UPLOADS_DIR, `${voiceId}.wav`);
+    try {
+      await fs.access(refWav);
+    } catch {
+      return reply.code(404).send({ error: 'Reference voice not found; upload it first.' });
+    }
   }
 
   let result;
@@ -1072,6 +1090,7 @@ fastify.post('/api/generate', async (request, reply) => {
           engine: selectedEngine,
           language: selectedLanguage,
           styles: normalizedStyles,
+          voicePrompt: normalizedVoicePrompt,
           jobId: generationJobId,
           signal,
         });
