@@ -463,6 +463,53 @@ export function createVoiceEngineRuntimeConfig({
   };
 }
 
+function collectOpenVoiceV1ConfigurationIssues(engineConfig) {
+  const requiredPaths = [
+    ['v1BaseConfigPath', 'Set OPENVOICE_V1_BASE_CONFIG_PATH or OPENVOICE_V1_CHECKPOINTS_PATH.'],
+    ['v1BaseCheckpointPath', 'Set OPENVOICE_V1_BASE_CHECKPOINT_PATH or OPENVOICE_V1_CHECKPOINTS_PATH.'],
+    ['v1StyleSePath', 'Set OPENVOICE_V1_STYLE_SE_PATH or OPENVOICE_V1_CHECKPOINTS_PATH to en_style_se.pth.'],
+    ['v1ConverterConfigPath', 'Set OPENVOICE_V1_CONVERTER_CONFIG_PATH or OPENVOICE_V1_CHECKPOINTS_PATH.'],
+    ['v1ConverterCheckpointPath', 'Set OPENVOICE_V1_CONVERTER_CHECKPOINT_PATH or OPENVOICE_V1_CHECKPOINTS_PATH.'],
+  ];
+
+  return requiredPaths
+    .filter(([configKey]) => !cleanOptionalString(engineConfig[configKey]))
+    .map(([, message]) => message);
+}
+
+function collectOpenVoiceV2ConfigurationIssues(engineConfig, language) {
+  const issues = [];
+  const requiredPaths = [
+    ['checkpointsPath', 'Set OPENVOICE_CHECKPOINTS_PATH to the OpenVoice V2 checkpoints directory.'],
+    ['converterConfigPath', 'Set OPENVOICE_CONVERTER_CONFIG_PATH or OPENVOICE_CHECKPOINTS_PATH.'],
+    ['converterCheckpointPath', 'Set OPENVOICE_CONVERTER_CHECKPOINT_PATH or OPENVOICE_CHECKPOINTS_PATH.'],
+  ];
+
+  issues.push(
+    ...requiredPaths
+      .filter(([configKey]) => !cleanOptionalString(engineConfig[configKey]))
+      .map(([, message]) => message),
+  );
+
+  const normalizedLanguage = normalizeLanguageCode(language);
+  const languagesToCheck = normalizedLanguage ? [normalizedLanguage] : Array.from(SUPPORTED_LANGUAGE_CODES);
+  for (const code of languagesToCheck) {
+    const mapping = engineConfig.languageMappings[code];
+    const uppercaseCode = code.toUpperCase();
+    if (!cleanOptionalString(mapping?.meloLanguage)) {
+      issues.push(`Set OPENVOICE_MELO_LANGUAGE_${uppercaseCode}.`);
+    }
+    if (!cleanOptionalString(mapping?.speakerId)) {
+      issues.push(`Set OPENVOICE_MELO_SPEAKER_${uppercaseCode}.`);
+    }
+    if (!cleanOptionalString(mapping?.sourceSePath)) {
+      issues.push(`Set OPENVOICE_SOURCE_SE_${uppercaseCode}_PATH or adjust the speaker mapping.`);
+    }
+  }
+
+  return issues;
+}
+
 export function getEngineConfigurationIssues(engine, runtimeConfig, language = null, styles = null) {
   const selectedEngine = normalizeGenerationEngine(engine);
   const issues = [];
@@ -477,48 +524,11 @@ export function getEngineConfigurationIssues(engine, runtimeConfig, language = n
   }
 
   if (selectedEngine === 'openvoice') {
-    if (hasActiveOpenVoiceStyles(styles)) {
-      if (!cleanOptionalString(engineConfig.v1BaseConfigPath)) {
-        issues.push('Set OPENVOICE_V1_BASE_CONFIG_PATH or OPENVOICE_V1_CHECKPOINTS_PATH.');
-      }
-      if (!cleanOptionalString(engineConfig.v1BaseCheckpointPath)) {
-        issues.push('Set OPENVOICE_V1_BASE_CHECKPOINT_PATH or OPENVOICE_V1_CHECKPOINTS_PATH.');
-      }
-      if (!cleanOptionalString(engineConfig.v1StyleSePath)) {
-        issues.push('Set OPENVOICE_V1_STYLE_SE_PATH or OPENVOICE_V1_CHECKPOINTS_PATH to en_style_se.pth.');
-      }
-      if (!cleanOptionalString(engineConfig.v1ConverterConfigPath)) {
-        issues.push('Set OPENVOICE_V1_CONVERTER_CONFIG_PATH or OPENVOICE_V1_CHECKPOINTS_PATH.');
-      }
-      if (!cleanOptionalString(engineConfig.v1ConverterCheckpointPath)) {
-        issues.push('Set OPENVOICE_V1_CONVERTER_CHECKPOINT_PATH or OPENVOICE_V1_CHECKPOINTS_PATH.');
-      }
-    } else {
-      if (!cleanOptionalString(engineConfig.checkpointsPath)) {
-        issues.push('Set OPENVOICE_CHECKPOINTS_PATH to the OpenVoice V2 checkpoints directory.');
-      }
-      if (!cleanOptionalString(engineConfig.converterConfigPath)) {
-        issues.push('Set OPENVOICE_CONVERTER_CONFIG_PATH or OPENVOICE_CHECKPOINTS_PATH.');
-      }
-      if (!cleanOptionalString(engineConfig.converterCheckpointPath)) {
-        issues.push('Set OPENVOICE_CONVERTER_CHECKPOINT_PATH or OPENVOICE_CHECKPOINTS_PATH.');
-      }
-
-      const normalizedLanguage = normalizeLanguageCode(language);
-      const languagesToCheck = normalizedLanguage ? [normalizedLanguage] : Array.from(SUPPORTED_LANGUAGE_CODES);
-      for (const code of languagesToCheck) {
-        const mapping = engineConfig.languageMappings[code];
-        if (!cleanOptionalString(mapping?.meloLanguage)) {
-          issues.push(`Set OPENVOICE_MELO_LANGUAGE_${code.toUpperCase()}.`);
-        }
-        if (!cleanOptionalString(mapping?.speakerId)) {
-          issues.push(`Set OPENVOICE_MELO_SPEAKER_${code.toUpperCase()}.`);
-        }
-        if (!cleanOptionalString(mapping?.sourceSePath)) {
-          issues.push(`Set OPENVOICE_SOURCE_SE_${code.toUpperCase()}_PATH or adjust the speaker mapping.`);
-        }
-      }
-    }
+    issues.push(
+      ...(hasActiveOpenVoiceStyles(styles)
+        ? collectOpenVoiceV1ConfigurationIssues(engineConfig)
+        : collectOpenVoiceV2ConfigurationIssues(engineConfig, language)),
+    );
   }
 
   return issues;

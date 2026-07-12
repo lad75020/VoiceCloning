@@ -7,6 +7,7 @@ import {
   VOICE_CLONING_ENGINE_IDS,
   buildVoiceEngineCommand,
   createVoiceEngineRuntimeConfig,
+  getEngineConfigurationIssues,
   hasActiveOpenVoiceStyles,
   listVoiceCloningEngines,
   normalizeGenerationEngine,
@@ -102,6 +103,35 @@ test('health metadata lists all six engines and configuration state', () => {
   assert.ok(engines.every((engine) => engine.configured === true));
 });
 
+test('configuration checks isolate OpenVoice V1 and V2 requirements', () => {
+  const runtimeConfig = createVoiceEngineRuntimeConfig({
+    env: {
+      CONDA_BASE: '/opt/miniconda3',
+      OPENVOICE_CONDA_ENV: 'openvoice-env',
+    },
+    backendDir: '/workspace/backend',
+    outputsDir: '/workspace/backend/outputs',
+    uploadsDir: '/workspace/backend/uploads',
+  });
+
+  const styledIssues = getEngineConfigurationIssues(
+    'openvoice',
+    runtimeConfig,
+    'en',
+    { friendly: 0.5 },
+  );
+  assert.equal(styledIssues.length, 5);
+  assert.ok(styledIssues.every((issue) => issue.includes('OPENVOICE_V1_')));
+
+  const neutralIssues = getEngineConfigurationIssues('openvoice', runtimeConfig, 'fr');
+  assert.deepEqual(neutralIssues.slice(0, 3), [
+    'Set OPENVOICE_CHECKPOINTS_PATH to the OpenVoice V2 checkpoints directory.',
+    'Set OPENVOICE_CONVERTER_CONFIG_PATH or OPENVOICE_CHECKPOINTS_PATH.',
+    'Set OPENVOICE_CONVERTER_CHECKPOINT_PATH or OPENVOICE_CHECKPOINTS_PATH.',
+  ]);
+  assert.equal(neutralIssues.length, 4);
+  assert.ok(neutralIssues.some((issue) => issue.includes('OPENVOICE_SOURCE_SE_FR_PATH')));
+});
 test('command builder preserves omnivoice argv contract', () => {
   const runtimeConfig = createRuntimeConfig();
   const command = buildVoiceEngineCommand({
