@@ -1,5 +1,5 @@
-import { Component, ElementRef, OnDestroy, ViewChild, signal, computed } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { Component, ElementRef, OnDestroy, ViewChild, signal, computed, ChangeDetectionStrategy } from '@angular/core';
+
 import { FormsModule } from '@angular/forms';
 import { AudioRecorderService } from './audio-recorder.service';
 import { OpenVoiceStyleAmounts, VoiceCloningService } from './voice-cloning.service';
@@ -45,8 +45,9 @@ function emptyOpenVoiceStyles(): OpenVoiceStyleAmounts {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [FormsModule],
   templateUrl: './app.component.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './app.component.scss',
 })
 export class AppComponent implements OnDestroy {
