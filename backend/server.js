@@ -778,7 +778,7 @@ function createVoiceCloningMcpServer() {
       voiceSampleFilename: z.string().optional().describe('Original filename, used only as a fallback to infer the audio extension.'),
       language: z.enum(['en', 'fr', 'es']).optional().describe('Language hint. Defaults to English.'),
       engine: z.enum(VOICE_CLONING_ENGINE_IDS).optional().describe('Voice cloning engine to use. Defaults to omnivoice.'),
-      voicePrompt: z.string().min(1).max(1000).optional().describe('Voice instruction. OmniVoice accepts only its documented comma-separated tags (for example: male, british accent); Qwen accepts free-form descriptions.'),
+      voicePrompt: z.string().min(1).max(1000).optional().describe('Voice instruction. OmniVoice accepts only its documented comma-separated tags (for example: male, british accent); Fun-CosyVoice 3 requires one or more documented comma-separated tone tags (for example: calm, heroic); Qwen accepts free-form descriptions.'),
       styles: z.object({
         happy: z.number().finite().min(0).max(1).optional(),
         sad: z.number().finite().min(0).max(1).optional(),

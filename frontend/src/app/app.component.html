@@ -278,9 +278,9 @@
             </div>
             @if (supportsVoicePrompt(engine())) {
               <div class="vc-style-summary" aria-live="polite">
-                <span><strong>Voice prompt:</strong> {{ voicePromptSummary() }}</span>
+                <span><strong>{{ engine() === 'cosyvoice' ? 'Tone tags:' : 'Voice prompt:' }}</strong> {{ voicePromptSummary() }}</span>
                 <button type="button" class="vc-btn vc-btn-ghost vc-btn-small" (click)="openVoicePromptModal(engine(), $event.currentTarget)" [disabled]="generating()">
-                  Edit voice
+                  {{ engine() === 'cosyvoice' ? 'Edit tones' : 'Edit voice' }}
                 </button>
               </div>
             }
@@ -411,7 +411,7 @@
     }
 
     <footer class="vc-footer">
-      <span>OmniVoice · MLX/Qwen · Chatterbox · CosyVoice · F5-TTS · OpenVoice V2</span>
+      <span>OmniVoice · MLX/Qwen · Chatterbox · Fun-CosyVoice 3 · F5-TTS · OpenVoice V2</span>
       <span class="vc-foot-dot">•</span>
       <span>Fastify · Angular · MCP</span>
       <span class="vc-foot-dot">•</span>
@@ -434,10 +434,10 @@
         <div class="vc-style-modal-head">
           <div>
             <span class="vc-eyebrow">{{ voicePromptModalLabel() }}</span>
-            <h2 id="voicePromptTitle">Describe the expected voice</h2>
+            <h2 id="voicePromptTitle">{{ voicePromptModalEngine() === 'cosyvoice' ? 'Select voice tones' : 'Describe the expected voice' }}</h2>
             <p id="voicePromptDescription">{{ voicePromptModalDescription() }}</p>
           </div>
-          <button type="button" class="vc-icon-btn" (click)="closeVoicePromptModal()" aria-label="Close voice description dialog">×</button>
+          <button type="button" class="vc-icon-btn" (click)="closeVoicePromptModal()" aria-label="Close voice settings dialog">×</button>
         </div>
 
         <div class="vc-tone-modal-body">
@@ -455,6 +455,20 @@
               }
             </div>
             <p class="vc-hint">Only these attributes are supported by OmniVoice and forwarded through <code>--instruct</code>.</p>
+          } @else if (voicePromptModalEngine() === 'cosyvoice') {
+            <span class="vc-label">Voice tones</span>
+            <div class="vc-chip-row vc-instruct-options" role="group" aria-label="Fun-CosyVoice 3 voice tone tags">
+              @for (option of cosyvoiceToneOptions; track option) {
+                <button type="button"
+                        class="vc-chip"
+                        [class.vc-chip-on]="isCosyVoiceToneSelected(option)"
+                        [attr.aria-pressed]="isCosyVoiceToneSelected(option)"
+                        (click)="toggleCosyVoiceTone(option)">
+                  {{ option }}
+                </button>
+              }
+            </div>
+            <p class="vc-hint">Select at least one tag. Only these tags are sent as <code>voice_prompt</code>; free-form instructions are not accepted.</p>
           } @else {
             <label class="vc-label" for="voicePrompt">Voice description</label>
             <textarea id="voicePrompt"

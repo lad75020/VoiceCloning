@@ -16,7 +16,7 @@ interface EngineOption {
   subtitle: string;
 }
 
-type VoicePromptEngine = 'omnivoice' | 'mlx-qwen';
+type VoicePromptEngine = 'omnivoice' | 'mlx-qwen' | 'cosyvoice';
 
 interface StoredVoiceSample {
   id: string;
@@ -70,11 +70,28 @@ export class AppComponent implements OnDestroy {
     'moderate pitch', 'low pitch', 'very low pitch', 'whisper',
   ] as const;
 
+  readonly cosyvoiceToneOptions = [
+    'adventurous', 'ambitious', 'ancient', 'angry', 'artistic', 'authoritative',
+    'bold', 'brave', 'calm', 'charming', 'cheerful', 'clever', 'commanding',
+    'compassionate', 'confident', 'conflicted', 'contempt', 'courageous',
+    'creative', 'cunning', 'curious', 'dark', 'deceptive', 'dedicated',
+    'defiant', 'determined', 'disciplined', 'disgusted', 'empathetic',
+    'energetic', 'fearful', 'fearless', 'happy', 'heroic', 'hopeful', 'humble',
+    'imaginative', 'indifferent', 'insightful', 'intelligent', 'introspective',
+    'joyful', 'loyal', 'merciless', 'mysterious', 'noble', 'objective',
+    'optimistic', 'passionate', 'patient', 'proud', 'relaxed', 'relentless',
+    'responsible', 'sad', 'selfless', 'serious', 'shocked', 'stealthy',
+    'surprised', 'vengeful', 'vigilant', 'wise', 'fast', 'loud', 'slow', 'soft',
+    'adventurer', 'alchemist', 'architect', 'chef', 'craftsman', 'detective',
+    'doctor', 'girl', 'knight', 'leader', 'merchant', 'peppa', 'poet', 'robot',
+    'ruler', 'scholar', 'wanderer', 'warrior', 'witch', 'youth',
+  ] as const;
+
   readonly engines: EngineOption[] = [
     { id: 'omnivoice', label: 'OmniVoice', subtitle: 'k2-fsa · multilingual' },
     { id: 'mlx-qwen', label: 'MLX/Qwen', subtitle: 'Apple Silicon · MLX' },
     { id: 'chatterbox', label: 'Chatterbox', subtitle: 'Reference prompt · multilingual' },
-    { id: 'cosyvoice', label: 'CosyVoice', subtitle: 'Cross-lingual · no ref transcript' },
+    { id: 'cosyvoice', label: 'Fun-CosyVoice 3', subtitle: 'Tone tags · instructed cloning' },
     { id: 'f5-tts', label: 'F5-TTS', subtitle: 'Built-in ASR · CLI clone' },
     { id: 'openvoice', label: 'OpenVoice V2', subtitle: 'MeloTTS + tone conversion' },
   ];
@@ -93,7 +110,7 @@ export class AppComponent implements OnDestroy {
   openVoiceStyles = signal<OpenVoiceStyleAmounts>(emptyOpenVoiceStyles());
   draftOpenVoiceStyles = signal<OpenVoiceStyleAmounts>(emptyOpenVoiceStyles());
   styleModalOpen = signal<boolean>(false);
-  voicePrompts = signal<Record<VoicePromptEngine, string>>({ omnivoice: '', 'mlx-qwen': '' });
+  voicePrompts = signal<Record<VoicePromptEngine, string>>({ omnivoice: '', 'mlx-qwen': '', cosyvoice: '' });
   draftVoicePrompt = signal<string>('');
   voicePromptModalEngine = signal<VoicePromptEngine | null>(null);
   text = signal<string>('');
@@ -399,7 +416,7 @@ export class AppComponent implements OnDestroy {
   }
 
   supportsVoicePrompt(engineId: string): engineId is VoicePromptEngine {
-    return engineId === 'omnivoice' || engineId === 'mlx-qwen';
+    return engineId === 'omnivoice' || engineId === 'mlx-qwen' || engineId === 'cosyvoice';
   }
 
   selectEngine(engineId: string, trigger: EventTarget | null = null): void {
@@ -441,13 +458,22 @@ export class AppComponent implements OnDestroy {
   }
 
   voicePromptModalLabel(): string {
-    return this.voicePromptModalEngine() === 'omnivoice' ? 'OMNIVOICE' : 'QWEN MLX';
+    switch (this.voicePromptModalEngine()) {
+      case 'omnivoice': return 'OMNIVOICE';
+      case 'cosyvoice': return 'FUN-COSYVOICE 3';
+      default: return 'QWEN MLX';
+    }
   }
 
   voicePromptModalDescription(): string {
-    return this.voicePromptModalEngine() === 'omnivoice'
-      ? 'Choose one or more supported voice attributes. OmniVoice does not accept free-form descriptions.'
-      : 'Describe how the generated voice should sound. This is sent to Qwen as voice_prompt.';
+    switch (this.voicePromptModalEngine()) {
+      case 'omnivoice':
+        return 'Choose one or more supported voice attributes. OmniVoice does not accept free-form descriptions.';
+      case 'cosyvoice':
+        return 'Choose one or more tone tags. Fun-CosyVoice 3 uses only these tags to build its instruction.';
+      default:
+        return 'Describe how the generated voice should sound. This is sent to Qwen as voice_prompt.';
+    }
   }
 
   voicePromptPlaceholder(): string {
@@ -455,6 +481,10 @@ export class AppComponent implements OnDestroy {
   }
 
   isOmniVoiceInstructSelected(option: string): boolean {
+    return this.draftVoicePrompt().split(',').map((item) => item.trim()).includes(option);
+  }
+
+  isCosyVoiceToneSelected(option: string): boolean {
     return this.draftVoicePrompt().split(',').map((item) => item.trim()).includes(option);
   }
 
@@ -466,6 +496,17 @@ export class AppComponent implements OnDestroy {
     else selected.add(option);
     this.draftVoicePrompt.set(
       this.omnivoiceInstructOptions.filter((item) => selected.has(item)).join(', '),
+    );
+  }
+
+  toggleCosyVoiceTone(option: string): void {
+    const selected = new Set(
+      this.draftVoicePrompt().split(',').map((item) => item.trim()).filter(Boolean),
+    );
+    if (selected.has(option)) selected.delete(option);
+    else selected.add(option);
+    this.draftVoicePrompt.set(
+      this.cosyvoiceToneOptions.filter((item) => selected.has(item)).join(', '),
     );
   }
 

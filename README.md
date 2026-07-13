@@ -1,6 +1,6 @@
 # VoiceCloning
 
-VoiceCloning is an authenticated Angular + Fastify studio for recording a reference voice, generating cloned speech over HTTP or MCP, and returning browser WebM/Opus or MCP MP3 output without changing the existing queue, cancellation, and upload workflow. MLX/Qwen prompts for a natural-language voice description, while OpenVoice offers weighted English style controls.
+VoiceCloning is an authenticated Angular + Fastify studio for recording a reference voice, generating cloned speech over HTTP or MCP, and returning browser WebM/Opus or MCP MP3 output without changing the existing queue, cancellation, and upload workflow. MLX/Qwen prompts for a natural-language voice description, Fun-CosyVoice 3 uses validated tone tags, and OpenVoice offers weighted English style controls.
 
 ## Engines
 
@@ -85,7 +85,9 @@ CHATTERBOX_T3_MODEL=v3
 
 COSYVOICE_CONDA_ENV=cosyvoice
 COSYVOICE_REPO_PATH=/absolute/path/to/CosyVoice
-COSYVOICE_MODEL_PATH=/absolute/path/to/CosyVoice/pretrained_models/CosyVoice2-0.5B
+COSYVOICE_MODEL=FunAudioLLM/Fun-CosyVoice3-0.5B-2512
+# Optional legacy local override; takes precedence over COSYVOICE_MODEL:
+# COSYVOICE_MODEL_PATH=/absolute/path/to/CosyVoice/pretrained_models/Fun-CosyVoice3-0.5B
 
 F5_TTS_CONDA_ENV=f5-tts
 F5_TTS_REPO_PATH=/absolute/path/to/F5-TTS
@@ -117,7 +119,7 @@ OPENVOICE_V1_CONVERTER_CHECKPOINT_PATH=
 Notes:
 
 - `CONDA_ENV` remains the fallback default for legacy OmniVoice and MLX/Qwen setups.
-- `COSYVOICE_MODEL_PATH` is required to run `cosyvoice`.
+- `cosyvoice` defaults to `FunAudioLLM/Fun-CosyVoice3-0.5B-2512`; no `COSYVOICE_MODEL_PATH` is required. On its first use, the adapter resolves that Hugging Face ID into the local Hugging Face cache. Set `COSYVOICE_MODEL` to another model ID or use the legacy `COSYVOICE_MODEL_PATH` for a prepared local directory.
 - `OPENVOICE_CHECKPOINTS_PATH` is required to run `openvoice`.
 - If `OPENVOICE_CONVERTER_CONFIG_PATH` or `OPENVOICE_CONVERTER_CHECKPOINT_PATH` are unset, the backend derives:
   - `${OPENVOICE_CHECKPOINTS_PATH}/converter/config.json`
@@ -184,16 +186,19 @@ conda create -n cosyvoice python=3.10 -y
 conda run -n cosyvoice pip install 'setuptools<81' wheel
 conda run -n cosyvoice pip install --no-build-isolation openai-whisper
 conda run -n cosyvoice pip install -r /absolute/path/to/CosyVoice/requirements.txt
-conda run -n cosyvoice pip install modelscope
-conda run -n cosyvoice python -c "from modelscope import snapshot_download; snapshot_download('iic/CosyVoice2-0.5B', local_dir='/absolute/path/to/CosyVoice/pretrained_models/CosyVoice2-0.5B')"
+conda run -n cosyvoice pip install huggingface_hub
+# Optional pre-download (the adapter otherwise downloads/caches this on first use):
+conda run -n cosyvoice python -c "from huggingface_hub import snapshot_download; snapshot_download('FunAudioLLM/Fun-CosyVoice3-0.5B-2512', local_dir='/absolute/path/to/CosyVoice/pretrained_models/Fun-CosyVoice3-0.5B')"
 ```
 
 On Apple Silicon, preinstalling `openai-whisper` without build isolation avoids its legacy `pkg_resources` build failure with current setuptools. The adapter automatically adds both the CosyVoice root and `third_party/Matcha-TTS` to `sys.path`.
 
 - Backend adapter: `backend/inference/cosyvoice_adapter.py`.
-- API used: `AutoModel(...).inference_cross_lingual(text, prompt_audio, stream=False)`.
+- Default model: `FunAudioLLM/Fun-CosyVoice3-0.5B-2512` from Hugging Face. A prepared local directory remains supported through the legacy `COSYVOICE_MODEL_PATH` override.
+- API used: `AutoModel(...).inference_instruct2(text, instruction, reference_audio, stream=False)`, following upstream `cosyvoice3_example`.
+- Selecting Fun-CosyVoice 3 opens a required tone-tag picker. `voice_prompt` must contain one or more comma-separated values from this exact lowercase allowlist: `adventurous, ambitious, ancient, angry, artistic, authoritative, bold, brave, calm, charming, cheerful, clever, commanding, compassionate, confident, conflicted, contempt, courageous, creative, cunning, curious, dark, deceptive, dedicated, defiant, determined, disciplined, disgusted, empathetic, energetic, fearful, fearless, happy, heroic, hopeful, humble, imaginative, indifferent, insightful, intelligent, introspective, joyful, loyal, merciless, mysterious, noble, objective, optimistic, passionate, patient, proud, relaxed, relentless, responsible, sad, selfless, serious, shocked, stealthy, surprised, vengeful, vigilant, wise, fast, loud, slow, soft, adventurer, alchemist, architect, chef, craftsman, detective, doctor, girl, knight, leader, merchant, peppa, poet, robot, ruler, scholar, wanderer, warrior, witch, youth`.
+- The backend canonicalizes case and comma whitespace, rejects anything outside that allowlist, then builds the fixed English `You are a helpful assistant.` instruction. Arbitrary prompt text is never passed to the model.
 - No user-supplied reference transcript is added to the request contract.
-- `COSYVOICE_MODEL_PATH` must point at the prepared local model directory.
 
 ### F5-TTS
 

@@ -55,6 +55,28 @@ export const OMNIVOICE_ENGLISH_INSTRUCT_ITEMS = Object.freeze([
   'young adult',
 ]);
 
+/**
+ * Fun-CosyVoice 3 accepts a deliberately small, product-defined vocabulary
+ * of tone tags. Keep this list in one place because it is also the security
+ * boundary between browser/MCP input and the model instruction.
+ */
+export const COSYVOICE_TONE_TAGS = Object.freeze([
+  'adventurous', 'ambitious', 'ancient', 'angry', 'artistic', 'authoritative',
+  'bold', 'brave', 'calm', 'charming', 'cheerful', 'clever', 'commanding',
+  'compassionate', 'confident', 'conflicted', 'contempt', 'courageous',
+  'creative', 'cunning', 'curious', 'dark', 'deceptive', 'dedicated',
+  'defiant', 'determined', 'disciplined', 'disgusted', 'empathetic',
+  'energetic', 'fearful', 'fearless', 'happy', 'heroic', 'hopeful', 'humble',
+  'imaginative', 'indifferent', 'insightful', 'intelligent', 'introspective',
+  'joyful', 'loyal', 'merciless', 'mysterious', 'noble', 'objective',
+  'optimistic', 'passionate', 'patient', 'proud', 'relaxed', 'relentless',
+  'responsible', 'sad', 'selfless', 'serious', 'shocked', 'stealthy',
+  'surprised', 'vengeful', 'vigilant', 'wise', 'fast', 'loud', 'slow', 'soft',
+  'adventurer', 'alchemist', 'architect', 'chef', 'craftsman', 'detective',
+  'doctor', 'girl', 'knight', 'leader', 'merchant', 'peppa', 'poet', 'robot',
+  'ruler', 'scholar', 'wanderer', 'warrior', 'witch', 'youth',
+]);
+
 const OMNIVOICE_CHINESE_INSTRUCT_ITEMS = Object.freeze([
   '东北话', '中年', '中音调', '云南话', '低音调', '儿童', '四川话', '女', '宁夏话',
   '少年', '极低音调', '极高音调', '桂林话', '河南话', '济南话', '甘肃话', '男',
@@ -63,6 +85,7 @@ const OMNIVOICE_CHINESE_INSTRUCT_ITEMS = Object.freeze([
 
 const OMNIVOICE_ENGLISH_INSTRUCT_SET = new Set(OMNIVOICE_ENGLISH_INSTRUCT_ITEMS);
 const OMNIVOICE_CHINESE_INSTRUCT_SET = new Set(OMNIVOICE_CHINESE_INSTRUCT_ITEMS);
+const COSYVOICE_TONE_TAG_SET = new Set(COSYVOICE_TONE_TAGS);
 
 export const VOICE_CLONING_ENGINES = Object.freeze({
   omnivoice: {
@@ -82,8 +105,8 @@ export const VOICE_CLONING_ENGINES = Object.freeze({
   },
   cosyvoice: {
     id: 'cosyvoice',
-    label: 'CosyVoice',
-    subtitle: 'Cross-lingual zero-shot',
+    label: 'Fun-CosyVoice 3',
+    subtitle: 'Instructed cross-lingual cloning',
   },
   'f5-tts': {
     id: 'f5-tts',
@@ -250,11 +273,30 @@ function normalizeOmniVoiceInstruct(prompt) {
   return items.join(delimiter === ',' ? ', ' : delimiter);
 }
 
+function normalizeCosyVoiceToneTags(prompt) {
+  const tags = prompt
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  const unsupported = tags.filter((tag) => !COSYVOICE_TONE_TAG_SET.has(tag));
+  if (unsupported.length > 0) {
+    throw new Error(
+      `Unsupported CosyVoice tone tag(s): ${unsupported.join(', ')}. Use only: ${COSYVOICE_TONE_TAGS.join(', ')}.`,
+    );
+  }
+
+  const canonical = [...new Set(tags)];
+  if (canonical.length === 0) {
+    throw new Error('voice_prompt is required when engine is cosyvoice. Select at least one CosyVoice tone tag.');
+  }
+  return canonical.join(', ');
+}
+
 export function normalizeVoicePrompt(voicePrompt, engine) {
   const selectedEngine = normalizeGenerationEngine(engine);
   if (voicePrompt === undefined || voicePrompt === null) {
-    if (selectedEngine === 'mlx-qwen') {
-      throw new Error('voice_prompt is required when engine is mlx-qwen.');
+    if (selectedEngine === 'mlx-qwen' || selectedEngine === 'cosyvoice') {
+      throw new Error(`voice_prompt is required when engine is ${selectedEngine}.`);
     }
     return null;
   }
@@ -264,20 +306,24 @@ export function normalizeVoicePrompt(voicePrompt, engine) {
 
   const normalized = voicePrompt.trim();
   if (!normalized) {
-    if (selectedEngine === 'mlx-qwen') {
-      throw new Error('voice_prompt is required when engine is mlx-qwen.');
+    if (selectedEngine === 'mlx-qwen' || selectedEngine === 'cosyvoice') {
+      throw new Error(`voice_prompt is required when engine is ${selectedEngine}.`);
     }
     return null;
   }
   if (normalized.length > 1000) {
     throw new Error('voice_prompt is too long (max 1000 chars).');
   }
-  if (selectedEngine !== 'omnivoice' && selectedEngine !== 'mlx-qwen') {
-    throw new Error('voice_prompt is supported only when engine is omnivoice or mlx-qwen.');
+  if (!['omnivoice', 'mlx-qwen', 'cosyvoice'].includes(selectedEngine)) {
+    throw new Error('voice_prompt is supported only when engine is omnivoice, mlx-qwen, or cosyvoice.');
   }
-  return selectedEngine === 'omnivoice'
-    ? normalizeOmniVoiceInstruct(normalized)
-    : normalized;
+  if (selectedEngine === 'omnivoice') {
+    return normalizeOmniVoiceInstruct(normalized);
+  }
+  if (selectedEngine === 'cosyvoice') {
+    return normalizeCosyVoiceToneTags(normalized);
+  }
+  return normalized;
 }
 
 export function normalizeLanguageCode(language) {
@@ -411,7 +457,12 @@ export function createVoiceEngineRuntimeConfig({
       cosyvoice: {
         condaEnv: cleanOptionalString(env.COSYVOICE_CONDA_ENV) || 'cosyvoice',
         repoPath: cleanOptionalString(env.COSYVOICE_REPO_PATH),
-        modelPath: cleanOptionalString(env.COSYVOICE_MODEL_PATH),
+        // COSYVOICE_MODEL_PATH remains a compatibility override for existing
+        // local installations. The default is a Hugging Face model id, which
+        // the adapter resolves into the shared Hugging Face cache on demand.
+        model: cleanOptionalString(env.COSYVOICE_MODEL_PATH)
+          || cleanOptionalString(env.COSYVOICE_MODEL)
+          || 'FunAudioLLM/Fun-CosyVoice3-0.5B-2512',
       },
       'f5-tts': {
         condaEnv: cleanOptionalString(env.F5_TTS_CONDA_ENV) || 'f5-tts',
@@ -517,10 +568,6 @@ export function getEngineConfigurationIssues(engine, runtimeConfig, language = n
 
   if (!cleanOptionalString(engineConfig.condaEnv)) {
     issues.push('Set the engine Conda environment name.');
-  }
-
-  if (selectedEngine === 'cosyvoice' && !cleanOptionalString(engineConfig.modelPath)) {
-    issues.push('Set COSYVOICE_MODEL_PATH to the prepared CosyVoice model directory.');
   }
 
   if (selectedEngine === 'openvoice') {
@@ -666,7 +713,8 @@ export function buildVoiceEngineCommand({
       '--text', text,
       '--ref-audio', refWav,
       '--output', outWav,
-      '--model-path', engineConfig.modelPath,
+      '--model', engineConfig.model,
+      '--tone-tags', normalizedVoicePrompt,
     ];
     appendOptionalArg(args, '--repo-path', engineConfig.repoPath);
     return {
@@ -674,7 +722,7 @@ export function buildVoiceEngineCommand({
       cmd: runtimeConfig.condaBin,
       args,
       env: withPythonPath(runtimeConfig.baseEnv, engineConfig.repoPath),
-      failureHint: 'Verify COSYVOICE_CONDA_ENV, COSYVOICE_MODEL_PATH, and COSYVOICE_REPO_PATH or package installation.',
+      failureHint: 'Verify COSYVOICE_CONDA_ENV, COSYVOICE_MODEL (or legacy COSYVOICE_MODEL_PATH), and COSYVOICE_REPO_PATH or package installation.',
     };
   }
 

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  COSYVOICE_TONE_TAGS,
   OPENVOICE_STYLE_KEYS,
   OPENVOICE_V1_STYLE_SPEAKER_IDS,
   VOICE_CLONING_ENGINE_IDS,
@@ -101,6 +102,20 @@ test('health metadata lists all six engines and configuration state', () => {
     VOICE_CLONING_ENGINE_IDS,
   );
   assert.ok(engines.every((engine) => engine.configured === true));
+});
+
+test('CosyVoice defaults to Fun-CosyVoice 3 without COSYVOICE_MODEL_PATH', () => {
+  const runtimeConfig = createVoiceEngineRuntimeConfig({
+    env: { CONDA_BASE: '/opt/miniconda3', COSYVOICE_CONDA_ENV: 'cosyvoice-env' },
+    backendDir: '/workspace/backend',
+    outputsDir: '/workspace/backend/outputs',
+    uploadsDir: '/workspace/backend/uploads',
+  });
+
+  assert.equal(runtimeConfig.engines.cosyvoice.model, 'FunAudioLLM/Fun-CosyVoice3-0.5B-2512');
+  assert.deepEqual(getEngineConfigurationIssues('cosyvoice', runtimeConfig), []);
+  assert.ok(COSYVOICE_TONE_TAGS.includes('calm'));
+  assert.ok(COSYVOICE_TONE_TAGS.includes('witch'));
 });
 
 test('configuration checks isolate OpenVoice V1 and V2 requirements', () => {
@@ -270,13 +285,14 @@ test('Qwen defaults to the MLX VoiceDesign checkpoint', () => {
   );
 });
 
-test('voice_prompt validation supports OmniVoice and Qwen while rejecting other engines', () => {
+test('voice_prompt validation supports OmniVoice, Qwen, and strict CosyVoice tone tags', () => {
   assert.equal(normalizeVoicePrompt('  Male, British Accent  ', 'omnivoice'), 'male, british accent');
   assert.equal(
     normalizeVoicePrompt('  Warm, reassuring, and measured.  ', 'mlx-qwen'),
     'Warm, reassuring, and measured.',
   );
   assert.equal(normalizeVoicePrompt(undefined, 'omnivoice'), null);
+  assert.equal(normalizeVoicePrompt(' Calm, BRAVE, calm ', 'cosyvoice'), 'calm, brave');
   assert.throws(
     () => normalizeVoicePrompt('enthousiaste et calme. assez rapide', 'omnivoice'),
     /unsupported OmniVoice instruct item.*enthousiaste et calme\. assez rapide/i,
@@ -286,8 +302,16 @@ test('voice_prompt validation supports OmniVoice and Qwen while rejecting other 
     /voice_prompt is required when engine is mlx-qwen/,
   );
   assert.throws(
+    () => normalizeVoicePrompt(undefined, 'cosyvoice'),
+    /voice_prompt is required when engine is cosyvoice/,
+  );
+  assert.throws(
+    () => normalizeVoicePrompt('calm, arbitrary prose', 'cosyvoice'),
+    /Unsupported CosyVoice tone tag\(s\): arbitrary prose/,
+  );
+  assert.throws(
     () => normalizeVoicePrompt('Warm', 'openvoice'),
-    /voice_prompt is supported only when engine is omnivoice or mlx-qwen/,
+    /voice_prompt is supported only when engine is omnivoice, mlx-qwen, or cosyvoice/,
   );
   assert.throws(
     () => normalizeVoicePrompt(42, 'mlx-qwen'),
@@ -308,6 +332,7 @@ test('command builder uses python adapter argv for cosyvoice', () => {
     refWav: '/tmp/ref.wav',
     outWav: '/tmp/cosyvoice.wav',
     jobId: 'job-4',
+    voicePrompt: ' CALM, Heroic ',
     runtimeConfig,
   });
 
@@ -322,9 +347,32 @@ test('command builder uses python adapter argv for cosyvoice', () => {
     '--text', 'Cross lingual',
     '--ref-audio', '/tmp/ref.wav',
     '--output', '/tmp/cosyvoice.wav',
-    '--model-path', '/models/cosyvoice',
+    '--model', '/models/cosyvoice',
+    '--tone-tags', 'calm, heroic',
     '--repo-path', '/repos/cosyvoice',
   ]);
+});
+
+test('command builder forwards the default Fun-CosyVoice model and canonical tone tags', () => {
+  const runtimeConfig = createVoiceEngineRuntimeConfig({
+    env: { CONDA_BASE: '/opt/miniconda3', COSYVOICE_CONDA_ENV: 'cosyvoice-env' },
+    backendDir: '/workspace/backend',
+    outputsDir: '/workspace/backend/outputs',
+    uploadsDir: '/workspace/backend/uploads',
+  });
+  const command = buildVoiceEngineCommand({
+    engine: 'cosyvoice',
+    text: 'A precise test.',
+    language: 'en',
+    refWav: '/tmp/ref.wav',
+    outWav: '/tmp/cosyvoice.wav',
+    jobId: 'job-4-default',
+    voicePrompt: ' Wise, SOFT ',
+    runtimeConfig,
+  });
+
+  assert.equal(command.args[command.args.indexOf('--model') + 1], 'FunAudioLLM/Fun-CosyVoice3-0.5B-2512');
+  assert.equal(command.args[command.args.indexOf('--tone-tags') + 1], 'wise, soft');
 });
 
 test('command builder uses supported F5 CLI with explicit output stem', () => {
