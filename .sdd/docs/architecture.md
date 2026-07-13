@@ -23,7 +23,8 @@ graph TD
   Queue --> Shared[generateClonedAudio]
   Shared --> EngineModule[backend/lib/voice-engines.js]
   EngineModule --> OmniVoice[omnivoice-infer]
-  EngineModule --> MlxQwen[mlx_audio.tts.generate]
+  EngineModule --> Qwen[python qwen3_tts_adapter.py]
+  Qwen --> WhisperMcp[Whisper MCP transcribe]
   EngineModule --> Chatterbox[python chatterbox_adapter.py]
   EngineModule --> CosyVoice[python cosyvoice_adapter.py]
   EngineModule --> F5[f5-tts_infer-cli]
@@ -53,11 +54,12 @@ Canonical engine IDs:
 
 Python adapters exist only where the upstream engine is primarily a Python API:
 
+- `qwen3_tts_adapter.py`
 - `chatterbox_adapter.py`
 - `cosyvoice_adapter.py`
 - `openvoice_adapter.py`
 
-F5-TTS uses its supported CLI directly. OmniVoice and MLX/Qwen keep their previous command paths.
+F5-TTS uses its supported CLI directly. OmniVoice keeps its supported CLI path; Qwen3 TTS uses its Python API adapter so the reference WAV can be transcribed through Whisper MCP before cloning.
 
 ## Directory structure
 
@@ -68,11 +70,13 @@ backend/
     voice-engines.js
   inference/
     common.py
+    qwen3_tts_adapter.py
     chatterbox_adapter.py
     cosyvoice_adapter.py
     openvoice_adapter.py
   test/
     voice-engines.test.js
+    test_qwen3_tts_adapter.py
 frontend/
   src/app/
     app.component.ts
@@ -105,5 +109,5 @@ frontend/
 
 ### Engine-specific browser fields
 
-- Decision: shared requests use `jobId`, `text`, `language`, and `engine`; reference-based engines also require `voiceId`, OmniVoice and MLX/Qwen use `voice_prompt`, and OpenVoice may add `styles`.
-- Reason: expressive controls remain explicit and engine-scoped. The backend validates OmniVoice's controlled instruction vocabulary before mapping `voice_prompt` to `--instruct`; Qwen keeps free-form descriptions and skips reference-audio processing for VoiceDesign requests.
+- Decision: shared requests use `jobId`, `voiceId`, `text`, `language`, and `engine`; only OmniVoice and CosyVoice may add `voice_prompt`, and OpenVoice may add `styles`.
+- Reason: Qwen3 TTS always clones the reference WAV. Its adapter obtains `ref_text` from stateless Whisper MCP before calling `Qwen3TTSModel.generate_voice_clone`; a supplied Qwen `voice_prompt` is rejected.

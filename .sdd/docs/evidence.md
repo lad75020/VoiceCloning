@@ -2,150 +2,99 @@
 
 ## Implemented files
 
-- `backend/server.js`
-- `backend/package.json`
+- `backend/inference/qwen3_tts_adapter.py`
 - `backend/lib/voice-engines.js`
-- `backend/inference/common.py`
-- `backend/inference/chatterbox_adapter.py`
-- `backend/inference/cosyvoice_adapter.py`
-- `backend/inference/openvoice_adapter.py`
+- `backend/server.js`
+- `backend/test/test_qwen3_tts_adapter.py`
 - `backend/test/voice-engines.test.js`
 - `frontend/src/app/app.component.ts`
 - `frontend/src/app/app.component.html`
-- `frontend/src/app/app.component.scss`
+- `frontend/src/app/app.component.spec.ts`
 - `README.md`
 - `frontend/README.md`
 - `.sdd/docs/architecture.md`
 - `.sdd/docs/configuration-guide.md`
 - `.sdd/docs/deployment-guide.md`
-- `.sdd/docs/developer-guide.md`
 - `.sdd/docs/functional-requirements.md`
 - `.sdd/docs/user-guide.md`
 
-## Verification commands and outputs
+## Verification commands and observed results
 
 ### Backend tests
-
-Command:
 
 ```bash
 cd backend
 npm test
 ```
 
-Observed result:
+Observed:
 
-```text
-> voice-cloning-backend@1.0.0 test
-> node --test
-
-✔ canonical engine ids are exposed for health and MCP schemas
-✔ engine aliases normalize to canonical ids
-✔ unsupported engines are rejected clearly
-✔ language normalization maps browser and locale aliases to supported codes
-✔ health metadata lists all six engines and configuration state
-✔ command builder preserves omnivoice argv contract
-✔ command builder preserves mlx/qwen argv contract and language mapping
-✔ command builder uses python adapter argv for chatterbox
-✔ command builder uses python adapter argv for cosyvoice
-✔ command builder uses supported F5 CLI with explicit output stem
-✔ command builder uses python adapter argv for openvoice with language mapping
-ℹ pass 11
-ℹ fail 0
-```
+- 25 Node tests passed.
+- 8 Python tests passed.
+- No failures, skips, or cancellations.
+- Qwen coverage includes the Base-model default, Apple Metal/MPS adapter argv and load parameters, legacy MLX model rejection-by-ignoring, no `voice_prompt` forwarding, Whisper MCP request/response handling, language mapping, and `generate_voice_clone` arguments.
 
 ### Backend syntax checks
-
-Command:
 
 ```bash
 cd backend
 npm run check:syntax
 ```
 
-Observed result:
+Observed: successful `node --check` for the server and engine module plus successful Python compilation for every inference adapter.
 
-```text
-> voice-cloning-backend@1.0.0 check:syntax
-> node --check server.js && node --check lib/voice-engines.js && python3 -m py_compile inference/*.py
+### Frontend tests
+
+```bash
+cd frontend
+npm test
 ```
 
-The command exited successfully with no syntax errors reported.
+Observed: 2 test files and 5 tests passed. Qwen coverage confirms immediate selection without a modal, reference-voice gating, and omission of `voice_prompt` from the generation request.
 
 ### Frontend production build
-
-Initial command:
 
 ```bash
 cd frontend
 npm run build
 ```
 
-Observed result:
+Observed: production bundle generated successfully in `frontend/dist/voice-cloning-frontend`. Angular reported the pre-existing component stylesheet budget warning (`15.18 kB` versus a `12.00 kB` budget); the build exited successfully.
+
+### Live Whisper MCP contract smoke test
+
+A synthetic voice clip generated with macOS `say` was converted to mono 16 kHz WAV and submitted through `qwen3_tts_adapter.transcribe_reference_audio` to:
 
 ```text
-> voice-cloning-frontend@0.0.0 build
-> ng build
-
-sh: ng: command not found
+https://whisper.dubertrand.fr/mcp
 ```
 
-Follow-up inspection:
+Observed transcript:
 
 ```text
-frontend/node_modules: missing
-frontend/dist: missing
+Hello from the Quen Voice Cloning intégration test.
 ```
 
-Install attempt:
+The first urllib request was rejected by Cloudflare with HTTP 403 because of Python's default user agent. The adapter now sends an explicit `VoiceCloning/1.0` user agent; the live retry succeeded, and the header is covered by a regression assertion.
+
+### Apple Metal/MPS runtime probe
+
+A PyTorch 2.6.0 environment already installed on this Apple Silicon host was used for a focused backend probe. `torch.backends.mps.is_built()` and `is_available()` both returned `True`; `torch.nn.functional.scaled_dot_product_attention` completed on `mps:0` with `torch.float16` input and output shape `(1, 1, 4, 8)`. This validates the adapter's `mps`/`float16`/`sdpa` defaults at the PyTorch runtime layer, but not Qwen model synthesis.
+
+### Diff validation
 
 ```bash
-cd frontend
-npm install
+git diff --check
 ```
 
-Observed result:
+Observed: no whitespace errors.
 
-```text
-npm error code ENOTFOUND
-npm error syscall getaddrinfo
-npm error network request to https://registry.npmjs.org/ws/-/ws-8.18.3.tgz failed
-```
+## Verification limitation
 
-Conclusion:
-
-- frontend build verification is blocked in this session because `frontend/node_modules` is absent and outbound npm registry access is unavailable
-
-## Git status after changes
-
-Command:
-
-```bash
-git status --short
-```
-
-Observed result:
-
-```text
- M .sdd/docs/architecture.md
- M .sdd/docs/configuration-guide.md
- M .sdd/docs/deployment-guide.md
- M .sdd/docs/developer-guide.md
- M .sdd/docs/functional-requirements.md
- M .sdd/docs/user-guide.md
- M README.md
- M backend/package.json
- M backend/server.js
- M frontend/README.md
- M frontend/src/app/app.component.html
- M frontend/src/app/app.component.scss
- M frontend/src/app/app.component.ts
-?? backend/inference/
-?? backend/lib/
-?? backend/test/
-```
+Real Qwen model synthesis was not run in this checkout. The adapter defaults to `mps`, `torch.float16`, and `sdpa`; `mps` is PyTorch's Metal backend key. This checkout has no `qwen3-tts` Conda environment, so the model path is covered only by unit/contract tests and still needs a synthesis smoke test in a prepared Apple Metal/MPS environment.
 
 ## Generated artifacts
 
-- `frontend/dist` was not generated because the build could not start without local Angular dependencies.
-- No model files or checkpoints were downloaded by these changes.
+- No model weights or checkpoints were downloaded.
+- Python `__pycache__` files generated by verification were removed or restored so they are absent from the final source diff.
+- The successful Angular build refreshed `frontend/dist`, which is ignored and does not appear in the source diff.

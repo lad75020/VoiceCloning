@@ -25,8 +25,17 @@ function createRuntimeConfig() {
       CONDA_ENV: 'omnivoice-default',
       OMNIVOICE_CONDA_ENV: 'omnivoice-env',
       OMNIVOICE_MODEL: 'k2-fsa/OmniVoice',
-      MLX_QWEN_CONDA_ENV: 'mlx-env',
-      MLX_QWEN_MODEL: 'mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16',
+      QWEN3_TTS_CONDA_ENV: 'qwen-env',
+      QWEN3_TTS_MODEL: 'Qwen/Qwen3-TTS-12Hz-1.7B-Base',
+      QWEN3_TTS_DEVICE_MAP: 'mps',
+      QWEN3_TTS_DTYPE: 'float16',
+      QWEN3_TTS_ATTN_IMPLEMENTATION: 'sdpa',
+      QWEN3_TTS_WHISPER_MCP_URL: 'https://whisper.example/mcp',
+      QWEN3_TTS_WHISPER_TIMEOUT_SECONDS: '90',
+      QWEN3_TTS_MAX_NEW_TOKENS: '96',
+      QWEN3_TTS_MAX_CHARS_PER_CHUNK: '100',
+      QWEN3_TTS_MPS_HIGH_WATERMARK_RATIO: '0.65',
+      QWEN3_TTS_MPS_LOW_WATERMARK_RATIO: '0.55',
       CHATTERBOX_CONDA_ENV: 'chatterbox-env',
       CHATTERBOX_REPO_PATH: '/repos/chatterbox',
       CHATTERBOX_MODEL: '/models/chatterbox',
@@ -188,7 +197,7 @@ test('command builder forwards OmniVoice voice descriptions through --instruct',
   assert.equal(command.args[command.args.indexOf('--instruct') + 1], 'male, british accent');
 });
 
-test('command builder creates the Qwen VoiceDesign argv contract', () => {
+test('command builder creates the Qwen3 Apple Metal/MPS adapter argv contract without voice_prompt', () => {
   const runtimeConfig = createRuntimeConfig();
   const command = buildVoiceEngineCommand({
     engine: 'mlx',
@@ -197,26 +206,33 @@ test('command builder creates the Qwen VoiceDesign argv contract', () => {
     refWav: '/tmp/ref.wav',
     outWav: '/workspace/backend/outputs/job-2.wav',
     jobId: 'job-2',
-    voicePrompt: 'A warm French narrator.',
     runtimeConfig,
   });
 
   assert.equal(command.engine, 'mlx-qwen');
   assert.deepEqual(command.args, [
     'run',
-    '-n', 'mlx-env',
+    '-n', 'qwen-env',
     '--no-capture-output',
     'python',
-    '-m', 'mlx_audio.tts.generate',
-    '--model', 'mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16',
+    '/workspace/backend/inference/qwen3_tts_adapter.py',
     '--text', 'Bonjour',
-    '--output_path', '/workspace/backend/outputs',
-    '--file_prefix', 'job-2',
-    '--audio_format', 'wav',
-    '--join_audio',
-    '--lang_code', 'fr',
-    '--instruct', 'A warm French narrator.',
+    '--language', 'fr',
+    '--ref-audio', '/tmp/ref.wav',
+    '--output', '/workspace/backend/outputs/job-2.wav',
+    '--model', 'Qwen/Qwen3-TTS-12Hz-1.7B-Base',
+    '--device-map', 'mps',
+    '--dtype', 'float16',
+    '--attn-implementation', 'sdpa',
+    '--whisper-mcp-url', 'https://whisper.example/mcp',
+    '--whisper-timeout-seconds', '90',
+    '--max-new-tokens', '96',
+    '--max-chars-per-chunk', '100',
   ]);
+  assert.equal(command.env.PYTORCH_MPS_HIGH_WATERMARK_RATIO, '0.65');
+  assert.equal(command.env.PYTORCH_MPS_LOW_WATERMARK_RATIO, '0.55');
+  assert.equal(command.args.includes('--instruct'), false);
+  assert.equal(command.args.includes('--voice_prompt'), false);
 });
 
 test('command builder uses python adapter argv for chatterbox', () => {
@@ -250,30 +266,31 @@ test('command builder uses python adapter argv for chatterbox', () => {
   ]);
 });
 
-test('command builder forwards Qwen tone description as the model instruct prompt', () => {
+test('command builder rejects a Qwen voice_prompt rather than forwarding it', () => {
   const runtimeConfig = createRuntimeConfig();
-  const command = buildVoiceEngineCommand({
-    engine: 'mlx-qwen',
-    text: 'Evening news',
-    language: 'en',
-    refWav: '/tmp/ref.wav',
-    outWav: '/workspace/backend/outputs/qwen-tone.wav',
-    jobId: 'qwen-tone',
-    voicePrompt: '  A composed announcer with a deep, steady voice.  ',
-    runtimeConfig,
-  });
-
-  assert.equal(
-    command.args[command.args.indexOf('--instruct') + 1],
-    'A composed announcer with a deep, steady voice.',
+  assert.throws(
+    () => buildVoiceEngineCommand({
+      engine: 'mlx-qwen',
+      text: 'Evening news',
+      language: 'en',
+      refWav: '/tmp/ref.wav',
+      outWav: '/workspace/backend/outputs/qwen-tone.wav',
+      jobId: 'qwen-tone',
+      voicePrompt: 'A composed announcer with a deep, steady voice.',
+      runtimeConfig,
+    }),
+    /voice_prompt is supported only when engine is omnivoice or cosyvoice/,
   );
-  assert.equal(command.args.includes('--ref_audio'), false);
-  assert.equal(command.args.includes('--stt_model'), false);
 });
 
-test('Qwen defaults to the MLX VoiceDesign checkpoint', () => {
+test('Qwen uses its dedicated environment by default and preserves Qwen-specific Conda overrides', () => {
   const runtimeConfig = createVoiceEngineRuntimeConfig({
-    env: { CONDA_BASE: '/opt/miniconda3', CONDA_ENV: 'mlx-env' },
+    env: {
+      CONDA_BASE: '/opt/miniconda3',
+      CONDA_ENV: 'omnivoice',
+      MLX_CONDA_ENV: 'unrelated-mlx-env',
+      MLX_QWEN_MODEL: 'mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16',
+    },
     backendDir: '/workspace/backend',
     outputsDir: '/workspace/backend/outputs',
     uploadsDir: '/workspace/backend/uploads',
@@ -281,16 +298,56 @@ test('Qwen defaults to the MLX VoiceDesign checkpoint', () => {
 
   assert.equal(
     runtimeConfig.engines['mlx-qwen'].model,
-    'mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16',
+    'Qwen/Qwen3-TTS-12Hz-1.7B-Base',
   );
+  assert.equal(runtimeConfig.engines['mlx-qwen'].condaEnv, 'qwen3-tts');
+  assert.equal(runtimeConfig.engines['mlx-qwen'].deviceMap, 'mps');
+  assert.equal(runtimeConfig.engines['mlx-qwen'].dtype, 'float16');
+  assert.equal(runtimeConfig.engines['mlx-qwen'].attnImplementation, 'sdpa');
+  assert.equal(runtimeConfig.engines['mlx-qwen'].whisperMcpUrl, 'https://whisper.dubertrand.fr/mcp');
+  assert.equal(runtimeConfig.engines['mlx-qwen'].maxNewTokens, '128');
+  assert.equal(runtimeConfig.engines['mlx-qwen'].maxCharsPerChunk, '120');
+  assert.equal(runtimeConfig.engines['mlx-qwen'].mpsHighWatermarkRatio, '0.70');
+  assert.equal(runtimeConfig.engines['mlx-qwen'].mpsLowWatermarkRatio, '0.60');
+
+  for (const [name, value] of [
+    ['QWEN3_TTS_CONDA_ENV', 'qwen3-override'],
+    ['MLX_QWEN_CONDA_ENV', 'mlx-qwen-override'],
+    ['QWEN_CONDA_ENV', 'qwen-override'],
+  ]) {
+    const overrideConfig = createVoiceEngineRuntimeConfig({
+      env: { CONDA_ENV: 'omnivoice', [name]: value },
+      backendDir: '/workspace/backend',
+      outputsDir: '/workspace/backend/outputs',
+      uploadsDir: '/workspace/backend/uploads',
+    });
+    assert.equal(overrideConfig.engines['mlx-qwen'].condaEnv, value);
+  }
 });
 
-test('voice_prompt validation supports OmniVoice, Qwen, and strict CosyVoice tone tags', () => {
+test('Qwen rejects unsafe memory overrides by falling back to bounded defaults', () => {
+  const runtimeConfig = createVoiceEngineRuntimeConfig({
+    env: {
+      QWEN3_TTS_MAX_NEW_TOKENS: '8192',
+      QWEN3_TTS_MAX_CHARS_PER_CHUNK: '5000',
+      QWEN3_TTS_MPS_HIGH_WATERMARK_RATIO: '0',
+      QWEN3_TTS_MPS_LOW_WATERMARK_RATIO: '2',
+    },
+    backendDir: '/workspace/backend',
+    outputsDir: '/workspace/backend/outputs',
+    uploadsDir: '/workspace/backend/uploads',
+  });
+
+  const qwen = runtimeConfig.engines['mlx-qwen'];
+  assert.equal(qwen.maxNewTokens, '128');
+  assert.equal(qwen.maxCharsPerChunk, '120');
+  assert.equal(qwen.mpsHighWatermarkRatio, '0.70');
+  assert.equal(qwen.mpsLowWatermarkRatio, '0.60');
+});
+
+test('voice_prompt validation supports only OmniVoice and strict CosyVoice tone tags', () => {
   assert.equal(normalizeVoicePrompt('  Male, British Accent  ', 'omnivoice'), 'male, british accent');
-  assert.equal(
-    normalizeVoicePrompt('  Warm, reassuring, and measured.  ', 'mlx-qwen'),
-    'Warm, reassuring, and measured.',
-  );
+  assert.equal(normalizeVoicePrompt(undefined, 'mlx-qwen'), null);
   assert.equal(normalizeVoicePrompt(undefined, 'omnivoice'), null);
   assert.equal(normalizeVoicePrompt(' Calm, BRAVE, calm ', 'cosyvoice'), 'calm, brave');
   assert.throws(
@@ -298,8 +355,8 @@ test('voice_prompt validation supports OmniVoice, Qwen, and strict CosyVoice ton
     /unsupported OmniVoice instruct item.*enthousiaste et calme\. assez rapide/i,
   );
   assert.throws(
-    () => normalizeVoicePrompt(undefined, 'mlx-qwen'),
-    /voice_prompt is required when engine is mlx-qwen/,
+    () => normalizeVoicePrompt('Warm, reassuring, and measured.', 'mlx-qwen'),
+    /voice_prompt is supported only when engine is omnivoice or cosyvoice/,
   );
   assert.throws(
     () => normalizeVoicePrompt(undefined, 'cosyvoice'),
@@ -311,7 +368,7 @@ test('voice_prompt validation supports OmniVoice, Qwen, and strict CosyVoice ton
   );
   assert.throws(
     () => normalizeVoicePrompt('Warm', 'openvoice'),
-    /voice_prompt is supported only when engine is omnivoice, mlx-qwen, or cosyvoice/,
+    /voice_prompt is supported only when engine is omnivoice or cosyvoice/,
   );
   assert.throws(
     () => normalizeVoicePrompt(42, 'mlx-qwen'),
@@ -319,7 +376,7 @@ test('voice_prompt validation supports OmniVoice, Qwen, and strict CosyVoice ton
   );
   assert.throws(
     () => normalizeVoicePrompt('x'.repeat(1001), 'mlx-qwen'),
-    /voice_prompt is too long/,
+    /voice_prompt is supported only when engine is omnivoice or cosyvoice/,
   );
 });
 

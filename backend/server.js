@@ -778,7 +778,7 @@ function createVoiceCloningMcpServer() {
       voiceSampleFilename: z.string().optional().describe('Original filename, used only as a fallback to infer the audio extension.'),
       language: z.enum(['en', 'fr', 'es']).optional().describe('Language hint. Defaults to English.'),
       engine: z.enum(VOICE_CLONING_ENGINE_IDS).optional().describe('Voice cloning engine to use. Defaults to omnivoice.'),
-      voicePrompt: z.string().min(1).max(1000).optional().describe('Voice instruction. OmniVoice accepts only its documented comma-separated tags (for example: male, british accent); Fun-CosyVoice 3 requires one or more documented comma-separated tone tags (for example: calm, heroic); Qwen accepts free-form descriptions.'),
+      voicePrompt: z.string().min(1).max(1000).optional().describe('Optional voice instruction for OmniVoice (documented comma-separated tags, for example: male, british accent) or Fun-CosyVoice 3 (documented comma-separated tone tags, for example: calm, heroic).'),
       styles: z.object({
         happy: z.number().finite().min(0).max(1).optional(),
         sad: z.number().finite().min(0).max(1).optional(),
@@ -1050,8 +1050,7 @@ fastify.post('/api/generate', async (request, reply) => {
   if (!isValidJobId(generationJobId)) {
     return reply.code(400).send({ error: 'Invalid generation jobId.' });
   }
-  const needsReferenceVoice = selectedEngine !== 'mlx-qwen';
-  if (needsReferenceVoice && (!voiceId || typeof voiceId !== 'string')) {
+  if (!voiceId || typeof voiceId !== 'string') {
     return reply.code(400).send({ error: 'voiceId is required.' });
   }
   if (!text || typeof text !== 'string' || !text.trim()) {
@@ -1061,18 +1060,15 @@ fastify.post('/api/generate', async (request, reply) => {
     return reply.code(400).send({ error: `text is too long (max ${MAX_TEXT_LENGTH} chars).` });
   }
   // Basic voiceId sanity to avoid path traversal
-  if (needsReferenceVoice && !/^[a-f0-9-]{8,}$/i.test(voiceId)) {
+  if (!/^[a-f0-9-]{8,}$/i.test(voiceId)) {
     return reply.code(400).send({ error: 'Invalid voiceId.' });
   }
 
-  let refWav = null;
-  if (needsReferenceVoice) {
-    refWav = path.join(UPLOADS_DIR, `${voiceId}.wav`);
-    try {
-      await fs.access(refWav);
-    } catch {
-      return reply.code(404).send({ error: 'Reference voice not found; upload it first.' });
-    }
+  const refWav = path.join(UPLOADS_DIR, `${voiceId}.wav`);
+  try {
+    await fs.access(refWav);
+  } catch {
+    return reply.code(404).send({ error: 'Reference voice not found; upload it first.' });
   }
 
   let result;

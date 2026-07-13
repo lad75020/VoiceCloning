@@ -46,7 +46,7 @@ npm run user:add -- alice choose-a-strong-password
 Before starting the backend, provision only the engines you intend to expose.
 
 - `omnivoice`: install `omnivoice-infer` in `OMNIVOICE_CONDA_ENV`
-- `mlx-qwen`: install `mlx-audio` in `MLX_QWEN_CONDA_ENV`
+- `mlx-qwen` (Qwen3 TTS): install `qwen-tts`, PyTorch with Apple Metal/MPS support, and `soundfile` in `qwen3-tts` (or set `QWEN3_TTS_CONDA_ENV`; compatible overrides are `MLX_QWEN_CONDA_ENV` and `QWEN_CONDA_ENV`). It does not use generic `CONDA_ENV` or `MLX_CONDA_ENV`. Set or verify the `QWEN3_TTS_WHISPER_MCP_URL` endpoint. `mps` is PyTorch's Metal backend key.
 - `chatterbox`: install the repo in `CHATTERBOX_CONDA_ENV`, optionally with `CHATTERBOX_REPO_PATH`
 - `cosyvoice`: install the repo in `COSYVOICE_CONDA_ENV` and set `COSYVOICE_MODEL_PATH`
 - `f5-tts`: install the repo or package in `F5_TTS_CONDA_ENV`
@@ -85,7 +85,7 @@ Runtime verification:
 
 - Queue behavior is process-local. Restarting the process drops queued jobs.
 - Output verification is strict. If an engine writes to the wrong path or leaves an empty WAV, the request fails explicitly.
-- OpenVoice, CosyVoice, Chatterbox, and F5-TTS can have larger Python dependency footprints than OmniVoice or MLX/Qwen. Isolate them in separate Conda envs.
+- Qwen3 TTS, OpenVoice, CosyVoice, Chatterbox, and F5-TTS can have larger Python dependency footprints than OmniVoice. Isolate them in separate Conda envs. Qwen3's default device settings target Apple Metal/MPS; do not treat unit checks as synthesis verification when the `qwen3-tts` environment is unavailable.
 - Protect the deployment with TLS and network controls before exposing it outside a trusted private network.
 
 ## Rollback

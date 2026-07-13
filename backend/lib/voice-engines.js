@@ -95,8 +95,8 @@ export const VOICE_CLONING_ENGINES = Object.freeze({
   },
   'mlx-qwen': {
     id: 'mlx-qwen',
-    label: 'MLX/Qwen',
-    subtitle: 'Apple Silicon · MLX',
+    label: 'Qwen3 TTS',
+    subtitle: 'Apple Metal/MPS · reference voice clone',
   },
   chatterbox: {
     id: 'chatterbox',
@@ -178,6 +178,38 @@ function cleanOptionalString(value) {
 
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function boundedPositiveIntegerString(value, fallback, maximum) {
+  const normalized = cleanOptionalString(value);
+  if (!normalized || !/^\d+$/.test(normalized)) {
+    return fallback;
+  }
+  const parsed = Number(normalized);
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= maximum
+    ? String(parsed)
+    : fallback;
+}
+
+function qwenMpsWatermarkRatios(env) {
+  const defaultHigh = '0.70';
+  const defaultLow = '0.60';
+  const highValue = cleanOptionalString(env.QWEN3_TTS_MPS_HIGH_WATERMARK_RATIO);
+  const lowValue = cleanOptionalString(env.QWEN3_TTS_MPS_LOW_WATERMARK_RATIO);
+  const high = Number(highValue);
+  const low = Number(lowValue);
+  if (
+    highValue
+    && lowValue
+    && Number.isFinite(high)
+    && Number.isFinite(low)
+    && low > 0
+    && low < high
+    && high <= 1
+  ) {
+    return { high: highValue, low: lowValue };
+  }
+  return { high: defaultHigh, low: defaultLow };
 }
 
 function withPythonPath(baseEnv, repoPath) {
@@ -295,7 +327,7 @@ function normalizeCosyVoiceToneTags(prompt) {
 export function normalizeVoicePrompt(voicePrompt, engine) {
   const selectedEngine = normalizeGenerationEngine(engine);
   if (voicePrompt === undefined || voicePrompt === null) {
-    if (selectedEngine === 'mlx-qwen' || selectedEngine === 'cosyvoice') {
+    if (selectedEngine === 'cosyvoice') {
       throw new Error(`voice_prompt is required when engine is ${selectedEngine}.`);
     }
     return null;
@@ -303,19 +335,19 @@ export function normalizeVoicePrompt(voicePrompt, engine) {
   if (typeof voicePrompt !== 'string') {
     throw new Error('voice_prompt must be a string.');
   }
+  if (!['omnivoice', 'cosyvoice'].includes(selectedEngine)) {
+    throw new Error('voice_prompt is supported only when engine is omnivoice or cosyvoice.');
+  }
 
   const normalized = voicePrompt.trim();
   if (!normalized) {
-    if (selectedEngine === 'mlx-qwen' || selectedEngine === 'cosyvoice') {
+    if (selectedEngine === 'cosyvoice') {
       throw new Error(`voice_prompt is required when engine is ${selectedEngine}.`);
     }
     return null;
   }
   if (normalized.length > 1000) {
     throw new Error('voice_prompt is too long (max 1000 chars).');
-  }
-  if (!['omnivoice', 'mlx-qwen', 'cosyvoice'].includes(selectedEngine)) {
-    throw new Error('voice_prompt is supported only when engine is omnivoice, mlx-qwen, or cosyvoice.');
   }
   if (selectedEngine === 'omnivoice') {
     return normalizeOmniVoiceInstruct(normalized);
@@ -426,6 +458,7 @@ export function createVoiceEngineRuntimeConfig({
   const openVoiceRepoPath = cleanOptionalString(env.OPENVOICE_REPO_PATH);
   const v1CheckpointsPath = cleanOptionalString(env.OPENVOICE_V1_CHECKPOINTS_PATH)
     || deriveOpenVoiceV1CheckpointsPath(openVoiceRepoPath, checkpointsPath);
+  const qwenWatermarks = qwenMpsWatermarkRatios(env);
 
   return {
     backendDir,
@@ -441,11 +474,24 @@ export function createVoiceEngineRuntimeConfig({
         model: cleanOptionalString(env.OMNIVOICE_MODEL) || 'k2-fsa/OmniVoice',
       },
       'mlx-qwen': {
-        condaEnv: cleanOptionalString(env.MLX_QWEN_CONDA_ENV)
-          || cleanOptionalString(env.MLX_CONDA_ENV)
+        condaEnv: cleanOptionalString(env.QWEN3_TTS_CONDA_ENV)
+          || cleanOptionalString(env.MLX_QWEN_CONDA_ENV)
           || cleanOptionalString(env.QWEN_CONDA_ENV)
-          || defaultCondaEnv,
-        model: cleanOptionalString(env.MLX_QWEN_MODEL) || 'mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16',
+          || 'qwen3-tts',
+        // The legacy MLX model override is intentionally not reused: those
+        // VoiceDesign/CustomVoice checkpoints are incompatible with
+        // Qwen3TTSModel.generate_voice_clone().
+        model: cleanOptionalString(env.QWEN3_TTS_MODEL)
+          || 'Qwen/Qwen3-TTS-12Hz-1.7B-Base',
+        deviceMap: cleanOptionalString(env.QWEN3_TTS_DEVICE_MAP) || 'mps',
+        dtype: cleanOptionalString(env.QWEN3_TTS_DTYPE) || 'float16',
+        attnImplementation: cleanOptionalString(env.QWEN3_TTS_ATTN_IMPLEMENTATION) || 'sdpa',
+        whisperMcpUrl: cleanOptionalString(env.QWEN3_TTS_WHISPER_MCP_URL) || 'https://whisper.dubertrand.fr/mcp',
+        whisperTimeoutSeconds: cleanOptionalString(env.QWEN3_TTS_WHISPER_TIMEOUT_SECONDS) || '120',
+        maxNewTokens: boundedPositiveIntegerString(env.QWEN3_TTS_MAX_NEW_TOKENS, '128', 128),
+        maxCharsPerChunk: boundedPositiveIntegerString(env.QWEN3_TTS_MAX_CHARS_PER_CHUNK, '120', 120),
+        mpsHighWatermarkRatio: qwenWatermarks.high,
+        mpsLowWatermarkRatio: qwenWatermarks.low,
       },
       chatterbox: {
         condaEnv: cleanOptionalString(env.CHATTERBOX_CONDA_ENV) || 'chatterbox',
@@ -656,25 +702,32 @@ export function buildVoiceEngineCommand({
       '-n', engineConfig.condaEnv,
       '--no-capture-output',
       'python',
-      '-m', 'mlx_audio.tts.generate',
-      '--model', engineConfig.model,
+      path.join(runtimeConfig.inferenceDir, 'qwen3_tts_adapter.py'),
       '--text', text,
+      '--language', normalizedLanguage || 'en',
+      '--ref-audio', refWav,
+      '--output', outWav,
+      '--model', engineConfig.model,
+      '--device-map', engineConfig.deviceMap,
+      '--dtype', engineConfig.dtype,
+      '--attn-implementation', engineConfig.attnImplementation,
+      '--whisper-mcp-url', engineConfig.whisperMcpUrl,
+      '--whisper-timeout-seconds', engineConfig.whisperTimeoutSeconds,
+      '--max-new-tokens', engineConfig.maxNewTokens,
+      '--max-chars-per-chunk', engineConfig.maxCharsPerChunk,
     ];
-    args.push(
-      '--output_path', path.dirname(outWav),
-      '--file_prefix', jobId,
-      '--audio_format', 'wav',
-      '--join_audio',
-    );
-    if (normalizedLanguage) {
-      args.push('--lang_code', normalizedLanguage);
-    }
-    args.push('--instruct', normalizedVoicePrompt);
     return {
       ...base,
       cmd: runtimeConfig.condaBin,
       args,
-      failureHint: 'Verify MLX_QWEN_CONDA_ENV, MLX_QWEN_MODEL, and mlx_audio installation.',
+      env: {
+        ...base.env,
+        // Scope MPS allocator limits to Qwen: a failed allocation is safer
+        // than allowing DynamicCache growth to exhaust host memory.
+        PYTORCH_MPS_HIGH_WATERMARK_RATIO: engineConfig.mpsHighWatermarkRatio,
+        PYTORCH_MPS_LOW_WATERMARK_RATIO: engineConfig.mpsLowWatermarkRatio,
+      },
+      failureHint: 'Verify QWEN3_TTS_CONDA_ENV, QWEN3_TTS_MODEL, Apple Metal/MPS PyTorch support, qwen-tts, soundfile, and the Whisper MCP endpoint.',
     };
   }
 

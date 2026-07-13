@@ -29,6 +29,6 @@ npm test
 
 ## UI notes
 
-- Engine cards share the same selection pattern. Selecting OmniVoice opens a supported-attribute picker; selecting Fun-CosyVoice 3 opens a required multi-select tone-tag picker; selecting MLX/Qwen opens a free-form voice-description modal and needs no recorded reference. Selecting OpenVoice opens its style controls.
-- Generation sends `jobId`, `text`, `language`, and `engine`; reference-based engines also send `voiceId`, OmniVoice, Fun-CosyVoice 3, and MLX/Qwen send `voice_prompt`, and OpenVoice may send `styles`. Fun-CosyVoice 3 accepts only its displayed lowercase tone tags.
+- Selecting Qwen3 TTS happens immediately and, like every engine, requires a recorded reference voice. Selecting OmniVoice opens a supported-attribute picker; selecting Fun-CosyVoice 3 opens a required multi-select tone-tag picker; selecting OpenVoice opens its style controls.
+- Generation sends `jobId`, `voiceId`, `text`, `language`, and `engine`. Only OmniVoice and Fun-CosyVoice 3 send `voice_prompt`; Qwen3 TTS never sends it. OpenVoice may also send `styles`. Fun-CosyVoice 3 accepts only its displayed lowercase tone tags.
 - The browser UI still offers `en`, `fr`, and `es`; backend normalization maps locale-style variants gracefully when requests come from other clients.

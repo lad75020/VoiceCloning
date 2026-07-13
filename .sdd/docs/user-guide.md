@@ -5,7 +5,7 @@
 The studio now offers six engines instead of two:
 
 - OmniVoice
-- MLX/Qwen
+- Qwen3 TTS
 - Chatterbox
 - CosyVoice
 - F5-TTS
@@ -51,13 +51,13 @@ Expected result:
 - does not accept free-form prose; unsupported API values are rejected before inference
 - continues to use the selected reference voice
 
-### MLX/Qwen
+### Qwen3 TTS
 
-- best fit for Apple Silicon deployments
-- selecting it opens a modal for a natural-language tone and voice description
-- requires a non-empty description before applying the selection; no reference recording is required
-- sends that description as `voice_prompt`; the backend forwards it to MLX/Qwen as `--instruct`
-- uses MLX plus joined WAV output under the hood
+- selecting it switches engines immediately; no Qwen settings modal is shown
+- requires the selected uploaded reference voice, like every other engine
+- uses the Base model's reference-cloning API with the reference WAV and a Whisper MCP transcript
+- does not accept or send `voice_prompt`
+- is configured for Apple Metal/MPS with `float16` and SDPA; `mps` is PyTorch's Metal backend key
 
 ### Chatterbox
 

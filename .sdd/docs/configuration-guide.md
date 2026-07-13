@@ -7,7 +7,7 @@ The backend reads environment variables at startup and builds one runtime config
 Priority:
 
 1. explicit environment variable
-2. derived default from another engine-specific variable or `CONDA_ENV`
+2. documented compatibility fallback for that engine
 3. hardcoded default in `voice-engines.js`
 
 ## Core variables
@@ -26,7 +26,7 @@ Priority:
 | `AUTH_INITIAL_USERNAME` | unset | Optional bootstrap user |
 | `AUTH_INITIAL_PASSWORD` | unset | Optional bootstrap password |
 | `CONDA_BASE` | `/Volumes/WDBlack4TB/opt/miniconda3` | Root used to derive `bin/conda` |
-| `CONDA_ENV` | `omnivoice` | Legacy fallback env for engines without their own override |
+| `CONDA_ENV` | `omnivoice` | Legacy fallback env for OmniVoice |
 
 ## Engine variables
 
@@ -37,12 +37,24 @@ Priority:
 | `OMNIVOICE_CONDA_ENV` | `CONDA_ENV` |
 | `OMNIVOICE_MODEL` | `k2-fsa/OmniVoice` |
 
-### MLX/Qwen
+### Qwen3 TTS
 
 | Variable | Default |
 |---|---|
-| `MLX_QWEN_CONDA_ENV` | `MLX_CONDA_ENV`, then `QWEN_CONDA_ENV`, then `CONDA_ENV` |
-| `MLX_QWEN_MODEL` | `mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16` |
+| `QWEN3_TTS_CONDA_ENV` | `MLX_QWEN_CONDA_ENV`, then `QWEN_CONDA_ENV`, then `qwen3-tts` |
+| `QWEN3_TTS_MODEL` | `Qwen/Qwen3-TTS-12Hz-1.7B-Base` |
+| `QWEN3_TTS_DEVICE_MAP` | `mps` |
+| `QWEN3_TTS_DTYPE` | `float16` |
+| `QWEN3_TTS_ATTN_IMPLEMENTATION` | `sdpa` |
+| `QWEN3_TTS_WHISPER_MCP_URL` | `https://whisper.dubertrand.fr/mcp` |
+| `QWEN3_TTS_WHISPER_TIMEOUT_SECONDS` | `120` |
+
+`MLX_QWEN_MODEL` is intentionally not a compatibility fallback: the previous
+MLX VoiceDesign/CustomVoice checkpoints cannot be used with Base-model
+`generate_voice_clone` inference.
+
+Qwen does not inherit the generic `CONDA_ENV` or `MLX_CONDA_ENV` values; those
+environments may not contain `qwen-tts`.
 
 ### Chatterbox
 
@@ -122,3 +134,4 @@ Priority:
 | missing CosyVoice model path | actionable runtime error before spawn |
 | missing OpenVoice checkpoint mapping | actionable runtime error before spawn |
 | missing or empty output WAV | engine failure with expected path in the error |
+| Qwen3 TTS deployment | requires `qwen-tts`, PyTorch with Apple Metal/MPS support, `soundfile`, and a reachable Whisper MCP endpoint; `mps` is PyTorch's Metal backend key |

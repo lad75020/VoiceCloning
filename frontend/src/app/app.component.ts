@@ -16,7 +16,7 @@ interface EngineOption {
   subtitle: string;
 }
 
-type VoicePromptEngine = 'omnivoice' | 'mlx-qwen' | 'cosyvoice';
+type VoicePromptEngine = 'omnivoice' | 'cosyvoice';
 
 interface StoredVoiceSample {
   id: string;
@@ -89,7 +89,7 @@ export class AppComponent implements OnDestroy {
 
   readonly engines: EngineOption[] = [
     { id: 'omnivoice', label: 'OmniVoice', subtitle: 'k2-fsa · multilingual' },
-    { id: 'mlx-qwen', label: 'MLX/Qwen', subtitle: 'Apple Silicon · MLX' },
+    { id: 'mlx-qwen', label: 'Qwen3 TTS', subtitle: 'Apple Metal/MPS · reference voice clone' },
     { id: 'chatterbox', label: 'Chatterbox', subtitle: 'Reference prompt · multilingual' },
     { id: 'cosyvoice', label: 'Fun-CosyVoice 3', subtitle: 'Tone tags · instructed cloning' },
     { id: 'f5-tts', label: 'F5-TTS', subtitle: 'Built-in ASR · CLI clone' },
@@ -110,7 +110,7 @@ export class AppComponent implements OnDestroy {
   openVoiceStyles = signal<OpenVoiceStyleAmounts>(emptyOpenVoiceStyles());
   draftOpenVoiceStyles = signal<OpenVoiceStyleAmounts>(emptyOpenVoiceStyles());
   styleModalOpen = signal<boolean>(false);
-  voicePrompts = signal<Record<VoicePromptEngine, string>>({ omnivoice: '', 'mlx-qwen': '', cosyvoice: '' });
+  voicePrompts = signal<Record<VoicePromptEngine, string>>({ omnivoice: '', cosyvoice: '' });
   draftVoicePrompt = signal<string>('');
   voicePromptModalEngine = signal<VoicePromptEngine | null>(null);
   text = signal<string>('');
@@ -148,7 +148,7 @@ export class AppComponent implements OnDestroy {
   });
 
   canGenerate = computed(
-    () => (this.engine() === 'mlx-qwen' || !!this.voiceId())
+    () => !!this.voiceId()
       && this.text().trim().length > 0
       && (!this.supportsVoicePrompt(this.engine()) || this.selectedVoicePrompt().trim().length > 0)
       && !this.generating(),
@@ -337,7 +337,7 @@ export class AppComponent implements OnDestroy {
   async generate(): Promise<void> {
     const id = this.voiceId();
     const textVal = this.text().trim();
-    if (!textVal || (!id && this.engine() !== 'mlx-qwen')) return;
+    if (!textVal || !id) return;
 
     if (this.engine() === 'openvoice' && this.hasActiveOpenVoiceStyles() && this.textLanguage() !== 'en') {
       this.error.set('OpenVoice styles are supported only for English output. Select English or reset the styles to zero.');
@@ -416,7 +416,7 @@ export class AppComponent implements OnDestroy {
   }
 
   supportsVoicePrompt(engineId: string): engineId is VoicePromptEngine {
-    return engineId === 'omnivoice' || engineId === 'mlx-qwen' || engineId === 'cosyvoice';
+    return engineId === 'omnivoice' || engineId === 'cosyvoice';
   }
 
   selectEngine(engineId: string, trigger: EventTarget | null = null): void {
@@ -461,7 +461,7 @@ export class AppComponent implements OnDestroy {
     switch (this.voicePromptModalEngine()) {
       case 'omnivoice': return 'OMNIVOICE';
       case 'cosyvoice': return 'FUN-COSYVOICE 3';
-      default: return 'QWEN MLX';
+      default: return '';
     }
   }
 
@@ -472,12 +472,8 @@ export class AppComponent implements OnDestroy {
       case 'cosyvoice':
         return 'Choose one or more tone tags. Fun-CosyVoice 3 uses only these tags to build its instruction.';
       default:
-        return 'Describe how the generated voice should sound. This is sent to Qwen as voice_prompt.';
+        return '';
     }
-  }
-
-  voicePromptPlaceholder(): string {
-    return 'A composed middle-aged male announcer with a deep, rich and magnetic voice…';
   }
 
   isOmniVoiceInstructSelected(option: string): boolean {

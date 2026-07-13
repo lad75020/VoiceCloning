@@ -34,7 +34,7 @@
 ## Engine-specific behavior
 
 - FR-014: `omnivoice` shall preserve the existing `omnivoice-infer` reference-cloning path, show a required picker of supported instruction attributes when selected, accept the selected tags as `voice_prompt`, validate them before inference, and forward them as `--instruct`.
-- FR-015: `mlx-qwen` shall preserve joined WAV output and language forwarding, show a required tone-description modal when selected, accept that description as `voice_prompt`, pass it to the VoiceDesign checkpoint as `--instruct`, and generate without a reference recording.
+- FR-015: `mlx-qwen` shall remain the compatibility engine ID for Qwen3 TTS, select immediately without a modal, require a reference voice, invoke `qwen3_tts_adapter.py` with the Base model and Apple Metal/MPS settings (`mps` is PyTorch's Metal backend key), obtain a reference transcript from configurable stateless Whisper MCP, call `generate_voice_clone` with text/language/reference WAV/reference transcript, and reject `voice_prompt`.
 - FR-016: `chatterbox` shall use the current multilingual Chatterbox API with configurable device selection, reference audio, and language.
 - FR-017: `cosyvoice` shall use a zero-shot or cross-lingual cloning API that does not add a reference transcript to the request contract, concatenate yielded chunks, and save one WAV.
 - FR-018: `f5-tts` shall use the supported CLI with `--ref_text ''` and an exact output directory plus file target.

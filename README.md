@@ -1,6 +1,6 @@
 # VoiceCloning
 
-VoiceCloning is an authenticated Angular + Fastify studio for recording a reference voice, generating cloned speech over HTTP or MCP, and returning browser WebM/Opus or MCP MP3 output without changing the existing queue, cancellation, and upload workflow. MLX/Qwen prompts for a natural-language voice description, Fun-CosyVoice 3 uses validated tone tags, and OpenVoice offers weighted English style controls.
+VoiceCloning is an authenticated Angular + Fastify studio for recording a reference voice, generating cloned speech over HTTP or MCP, and returning browser WebM/Opus or MCP MP3 output without changing the existing queue, cancellation, and upload workflow. Qwen3 TTS clones the uploaded reference voice on Apple Metal/MPS after transcribing it through Whisper MCP; Fun-CosyVoice 3 uses validated tone tags, and OpenVoice offers weighted English style controls.
 
 ## Engines
 
@@ -20,7 +20,7 @@ HTTP requests accept sensible aliases such as `mlx`, `qwen`, `cosy`, `f5`, and `
 - `frontend/` Angular UI, auth client, audio recorder, and engine selector.
 - `backend/` Fastify API, MCP endpoint, auth database, queue, and inference orchestration.
 - `backend/lib/voice-engines.js` shared engine metadata, alias normalization, language mapping, and argv construction.
-- `backend/inference/` Python adapters for Chatterbox, CosyVoice, and OpenVoice V2.
+- `backend/inference/` Python adapters for Qwen3 TTS, Chatterbox, CosyVoice, and OpenVoice V2.
 - `backend/test/voice-engines.test.js` backend command-construction tests that do not load models.
 - `.sdd/docs/` architecture, configuration, deployment, developer, functional, user, and evidence documentation.
 
@@ -74,8 +74,14 @@ Per-engine variables:
 OMNIVOICE_CONDA_ENV=omnivoice
 OMNIVOICE_MODEL=k2-fsa/OmniVoice
 
-MLX_QWEN_CONDA_ENV=omnivoice
-MLX_QWEN_MODEL=mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16
+QWEN3_TTS_CONDA_ENV=qwen3-tts
+QWEN3_TTS_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base
+QWEN3_TTS_DEVICE_MAP=mps
+QWEN3_TTS_DTYPE=float16
+QWEN3_TTS_ATTN_IMPLEMENTATION=sdpa
+QWEN3_TTS_WHISPER_MCP_URL=https://whisper.dubertrand.fr/mcp
+QWEN3_TTS_WHISPER_TIMEOUT_SECONDS=120
+# Compatibility Conda fallbacks: MLX_QWEN_CONDA_ENV, QWEN_CONDA_ENV
 
 CHATTERBOX_CONDA_ENV=chatterbox
 CHATTERBOX_REPO_PATH=/absolute/path/to/chatterbox
@@ -118,7 +124,7 @@ OPENVOICE_V1_CONVERTER_CHECKPOINT_PATH=
 
 Notes:
 
-- `CONDA_ENV` remains the fallback default for legacy OmniVoice and MLX/Qwen setups.
+- `CONDA_ENV` remains a legacy fallback for OmniVoice. Qwen defaults to the dedicated `qwen3-tts` environment and does not reuse generic `CONDA_ENV` or `MLX_CONDA_ENV`; `QWEN3_TTS_CONDA_ENV` takes precedence over compatible `MLX_QWEN_CONDA_ENV` and `QWEN_CONDA_ENV` overrides. The old `MLX_QWEN_MODEL` override is intentionally ignored because MLX VoiceDesign/CustomVoice checkpoints are incompatible with Base-model reference cloning.
 - `cosyvoice` defaults to `FunAudioLLM/Fun-CosyVoice3-0.5B-2512`; no `COSYVOICE_MODEL_PATH` is required. On its first use, the adapter resolves that Hugging Face ID into the local Hugging Face cache. Set `COSYVOICE_MODEL` to another model ID or use the legacy `COSYVOICE_MODEL_PATH` for a prepared local directory.
 - `OPENVOICE_CHECKPOINTS_PATH` is required to run `openvoice`.
 - If `OPENVOICE_CONVERTER_CONFIG_PATH` or `OPENVOICE_CONVERTER_CHECKPOINT_PATH` are unset, the backend derives:
@@ -152,17 +158,17 @@ conda run -n omnivoice pip install omnivoice
 - Reference input: converted mono 16 kHz WAV.
 - Output verification: backend requires the exact `${jobId}.wav` to exist and be non-empty.
 
-### MLX/Qwen
+### Qwen3 TTS Apple Metal/MPS voice clone
 
 ```bash
-conda create -n mlx-qwen python=3.10 -y
-conda run -n mlx-qwen pip install mlx-audio
+conda create -n qwen3-tts python=3.12 -y
+conda run -n qwen3-tts pip install -U torch qwen-tts soundfile
 ```
 
-- Best on Apple Silicon.
-- Selecting MLX/Qwen opens a required tone-description modal. The browser sends the description as the top-level `voice_prompt` field of the `/api/generate` JSON body (maximum 1000 characters); no reference recording is required.
-- The backend maps `voice_prompt` to `mlx_audio.tts.generate --instruct`, the MLX/Qwen parameter for CustomVoice emotion/style and VoiceDesign descriptions.
-- Uses `mlx_audio.tts.generate` plus `--join_audio` so the backend expects one exact WAV file.
+- Uses `Qwen/Qwen3-TTS-12Hz-1.7B-Base` through `backend/inference/qwen3_tts_adapter.py` on Apple Metal/MPS (`mps`, `float16`, `sdpa` by default). `mps` is PyTorch's device key for its Metal backend.
+- Selecting Qwen3 TTS is immediate. It requires the uploaded reference voice and never accepts `voice_prompt`.
+- The adapter submits the reference WAV to the configurable stateless Whisper MCP endpoint, then passes the resulting transcript as `ref_text` to `generate_voice_clone` and writes the exact requested WAV.
+- Configure an Apple Silicon host with PyTorch MPS support and the Whisper MCP endpoint before enabling this engine. This checkout has no `qwen3-tts` Conda environment, so Qwen model synthesis has not been run here.
 
 ### Chatterbox
 
@@ -281,7 +287,8 @@ Backend tests do not load models. They cover:
 - unsupported engine rejection
 - language normalization
 - argv and adapter argument construction for all six engines
-- OmniVoice and Qwen `voice_prompt` validation and `--instruct` forwarding
+- OmniVoice and CosyVoice `voice_prompt` validation and instruction forwarding
+- Qwen3 adapter argv, Base model defaults, reference-audio contract, and mocked Whisper MCP/model integration
 - OpenVoice style validation, V1 argv construction, and zero-style V2 fallback
 
 Commands:
@@ -297,7 +304,7 @@ npm run build
 
 ## Platform and license caveats
 
-- `mlx-qwen` is the most Apple-Silicon-specific engine in this repository.
+- `mlx-qwen` remains the compatibility engine ID for Qwen3 TTS. Its Apple-compatible defaults use PyTorch's Metal backend key, `mps`.
 - `chatterbox` and `f5-tts` support MPS through their upstream PyTorch stacks; `cosyvoice` currently follows upstream device selection and generally runs on CUDA when available or CPU otherwise; `openvoice` depends on OpenVoice/MeloTTS support for the selected device.
 - OpenVoice V2 also depends on MeloTTS assets and speaker embeddings.
 - This repository does not bundle third-party model weights, checkpoints, or upstream repositories.

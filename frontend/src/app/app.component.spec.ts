@@ -40,3 +40,42 @@ describe('AppComponent Fun-CosyVoice tone picker', () => {
     expect(component.selectedVoicePrompt()).toBe('');
   });
 });
+
+describe('AppComponent Qwen3 TTS selection', () => {
+  it('selects Qwen immediately without a prompt modal and still requires a reference voice', () => {
+    const component = createComponent();
+
+    component.selectEngine('mlx-qwen');
+
+    expect(component.engine()).toBe('mlx-qwen');
+    expect(component.voicePromptModalEngine()).toBeNull();
+    expect(component.supportsVoicePrompt('mlx-qwen')).toBe(false);
+
+    component.text.set('Reference-cloned Qwen speech.');
+    expect(component.canGenerate()).toBe(false);
+    component.voiceId.set('reference-voice-id');
+    expect(component.canGenerate()).toBe(true);
+  });
+
+  it('sends the required reference voice but no voice_prompt', async () => {
+    const generate = vi.fn((..._args: unknown[]) => ({
+      toPromise: vi.fn().mockRejectedValue(new Error('stop after request capture')),
+    }));
+    const component = new AppComponent(
+      {} as never,
+      { generate } as never,
+      { refreshSession: vi.fn() } as never,
+    );
+    component.selectEngine('mlx-qwen');
+    component.voiceId.set('reference-voice-id');
+    component.text.set('Qwen clones this reference voice.');
+
+    await component.generate();
+
+    expect(generate).toHaveBeenCalledWith(expect.objectContaining({
+      engine: 'mlx-qwen',
+      voiceId: 'reference-voice-id',
+    }));
+    expect(generate.mock.calls[0][0] as Record<string, unknown>).not.toHaveProperty('voice_prompt');
+  });
+});

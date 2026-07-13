@@ -107,7 +107,7 @@
       </h1>
       <p class="vc-subtitle">
         Record a short reference, type what you want to say, and generate
-        natural speech with OmniVoice, MLX/Qwen, Chatterbox, CosyVoice,
+        natural speech with OmniVoice, Qwen3 TTS, Chatterbox, CosyVoice,
         F5-TTS, or OpenVoice V2.
       </p>
     </section>
@@ -357,12 +357,7 @@
             </button>
           }
 
-          @if (engine() === 'mlx-qwen') {
-            <div class="vc-hint">
-              Qwen VoiceDesign uses the voice description; no reference recording is required.
-            </div>
-          }
-          @if (!voiceId() && engine() !== 'mlx-qwen') {
+          @if (!voiceId()) {
             <div class="vc-hint">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
@@ -411,7 +406,7 @@
     }
 
     <footer class="vc-footer">
-      <span>OmniVoice · MLX/Qwen · Chatterbox · Fun-CosyVoice 3 · F5-TTS · OpenVoice V2</span>
+      <span>OmniVoice · Qwen3 TTS · Chatterbox · Fun-CosyVoice 3 · F5-TTS · OpenVoice V2</span>
       <span class="vc-foot-dot">•</span>
       <span>Fastify · Angular · MCP</span>
       <span class="vc-foot-dot">•</span>
@@ -434,7 +429,7 @@
         <div class="vc-style-modal-head">
           <div>
             <span class="vc-eyebrow">{{ voicePromptModalLabel() }}</span>
-            <h2 id="voicePromptTitle">{{ voicePromptModalEngine() === 'cosyvoice' ? 'Select voice tones' : 'Describe the expected voice' }}</h2>
+            <h2 id="voicePromptTitle">{{ voicePromptModalEngine() === 'cosyvoice' ? 'Select voice tones' : 'Select voice attributes' }}</h2>
             <p id="voicePromptDescription">{{ voicePromptModalDescription() }}</p>
           </div>
           <button type="button" class="vc-icon-btn" (click)="closeVoicePromptModal()" aria-label="Close voice settings dialog">×</button>
@@ -469,20 +464,6 @@
               }
             </div>
             <p class="vc-hint">Select at least one tag. Only these tags are sent as <code>voice_prompt</code>; free-form instructions are not accepted.</p>
-          } @else {
-            <label class="vc-label" for="voicePrompt">Voice description</label>
-            <textarea id="voicePrompt"
-                      class="vc-textarea"
-                      rows="6"
-                      maxlength="1000"
-                      autofocus
-                      [placeholder]="voicePromptPlaceholder()"
-                      [ngModel]="draftVoicePrompt()"
-                      (ngModelChange)="draftVoicePrompt.set($event)"></textarea>
-            <div class="vc-label-row vc-tone-count-row">
-              <span class="vc-hint">Include timbre, age, accent, emotion, pace, and articulation.</span>
-              <span class="vc-count mono">{{ draftVoicePrompt().length }} / 1000</span>
-            </div>
           }
         </div>
 
