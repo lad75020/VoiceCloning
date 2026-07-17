@@ -499,6 +499,8 @@ export function createVoiceEngineRuntimeConfig({
         model: cleanOptionalString(env.CHATTERBOX_MODEL) || 'ResembleAI/chatterbox',
         device: cleanOptionalString(env.CHATTERBOX_DEVICE) || 'auto',
         t3Model: cleanOptionalString(env.CHATTERBOX_T3_MODEL) || 'v3',
+        maxNewTokens: boundedPositiveIntegerString(env.CHATTERBOX_MAX_NEW_TOKENS, '256', 256),
+        maxCharsPerChunk: boundedPositiveIntegerString(env.CHATTERBOX_MAX_CHARS_PER_CHUNK, '120', 120),
       },
       cosyvoice: {
         condaEnv: cleanOptionalString(env.COSYVOICE_CONDA_ENV) || 'cosyvoice',
@@ -745,6 +747,8 @@ export function buildVoiceEngineCommand({
       '--model', engineConfig.model,
       '--device', engineConfig.device,
       '--t3-model', engineConfig.t3Model,
+      '--max-new-tokens', engineConfig.maxNewTokens,
+      '--max-chars-per-chunk', engineConfig.maxCharsPerChunk,
     ];
     appendOptionalArg(args, '--repo-path', engineConfig.repoPath);
     return {

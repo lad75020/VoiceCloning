@@ -41,6 +41,8 @@ function createRuntimeConfig() {
       CHATTERBOX_MODEL: '/models/chatterbox',
       CHATTERBOX_DEVICE: 'auto',
       CHATTERBOX_T3_MODEL: 'v3',
+      CHATTERBOX_MAX_NEW_TOKENS: '192',
+      CHATTERBOX_MAX_CHARS_PER_CHUNK: '90',
       COSYVOICE_CONDA_ENV: 'cosyvoice-env',
       COSYVOICE_REPO_PATH: '/repos/cosyvoice',
       COSYVOICE_MODEL_PATH: '/models/cosyvoice',
@@ -262,8 +264,26 @@ test('command builder uses python adapter argv for chatterbox', () => {
     '--model', '/models/chatterbox',
     '--device', 'auto',
     '--t3-model', 'v3',
+    '--max-new-tokens', '192',
+    '--max-chars-per-chunk', '90',
     '--repo-path', '/repos/chatterbox',
   ]);
+});
+
+test('Chatterbox falls back to conservative bounded defaults for unsafe overrides', () => {
+  const runtimeConfig = createVoiceEngineRuntimeConfig({
+    env: {
+      CHATTERBOX_MAX_NEW_TOKENS: '0',
+      CHATTERBOX_MAX_CHARS_PER_CHUNK: '5000',
+    },
+    backendDir: '/workspace/backend',
+    outputsDir: '/workspace/backend/outputs',
+    uploadsDir: '/workspace/backend/uploads',
+  });
+
+  const chatterbox = runtimeConfig.engines.chatterbox;
+  assert.equal(chatterbox.maxNewTokens, '256');
+  assert.equal(chatterbox.maxCharsPerChunk, '120');
 });
 
 test('command builder rejects a Qwen voice_prompt rather than forwarding it', () => {

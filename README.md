@@ -88,6 +88,8 @@ CHATTERBOX_REPO_PATH=/absolute/path/to/chatterbox
 CHATTERBOX_MODEL=ResembleAI/chatterbox
 CHATTERBOX_DEVICE=auto
 CHATTERBOX_T3_MODEL=v3
+CHATTERBOX_MAX_NEW_TOKENS=256
+CHATTERBOX_MAX_CHARS_PER_CHUNK=120
 
 COSYVOICE_CONDA_ENV=cosyvoice
 COSYVOICE_REPO_PATH=/absolute/path/to/CosyVoice
@@ -183,6 +185,7 @@ conda run -n chatterbox pip install -e /absolute/path/to/chatterbox
 - API used: `chatterbox.mtl_tts.ChatterboxMultilingualTTS.from_pretrained(...).generate(...)`.
 - Device selection: `CHATTERBOX_DEVICE=auto` prefers CUDA, then MPS, then CPU.
 - `CHATTERBOX_MODEL=ResembleAI/chatterbox` uses the upstream fixed Hugging Face repository; alternatively set it to a local checkpoint directory accepted by `from_local`.
+- The adapter logs the selected device to stderr, caps every T3 inference call at `CHATTERBOX_MAX_NEW_TOKENS` with a hard maximum of `256`, and splits normalized input into sentence-aware chunks capped at `CHATTERBOX_MAX_CHARS_PER_CHUNK` with a hard maximum of `120`.
 
 ### CosyVoice
 
